@@ -1,0 +1,42 @@
+# Operational systems feeding the warehouse. dbt sources reference these keys via meta.source_system.
+source_systems:
+  - key: shopfront
+    name: Shopfront
+    system_type: E-commerce platform
+    vendor: Shopfront Inc. (SaaS)
+    description: Storefront, catalogue and checkout for web and app orders. System of record for customers, products and orders.
+    owner: commerce
+    ingestion_method: Admin API extract (incremental by updated_at)
+    load_frequency: Hourly
+  - key: payrail
+    name: PayRail
+    system_type: Payment processor
+    vendor: PayRail Payments Ltd.
+    description: Card, wallet and gift-card processing. System of record for payment attempts and refunds.
+    owner: payments
+    ingestion_method: Webhook stream to landing table
+    load_frequency: Near real-time
+  - key: rebill
+    name: Rebill
+    system_type: Subscription billing
+    vendor: Rebill Co. (SaaS)
+    description: Manages subscription plans, billing cycles and cancellations; creates renewal orders in Shopfront.
+    owner: commerce
+    ingestion_method: REST API extract (full refresh)
+    load_frequency: Every 6 hours
+  - key: deskline
+    name: Deskline
+    system_type: Customer support ticketing
+    vendor: Deskline (SaaS)
+    description: Email, chat, phone and social support tickets with CSAT surveys.
+    owner: customer_experience
+    ingestion_method: Incremental export API
+    load_frequency: Hourly
+  - key: campaignhub
+    name: CampaignHub
+    system_type: Marketing campaign management
+    vendor: Internal tool
+    description: Campaign calendar, budgets and promo codes for paid and owned channels.
+    owner: growth_analytics
+    ingestion_method: Daily CSV drop to object storage
+    load_frequency: Daily

@@ -1,0 +1,104 @@
+version: 2
+
+# Raw landing tables, loaded by the Platform Engineering ingestion jobs.
+# meta.source_system links each table to the operational system in config/governance/source_systems.yml.
+# Freshness SLAs (warn_after on _loaded_at) reflect how often each table normally receives new rows;
+# slow-moving reference tables (products, campaigns) have no SLA.
+
+sources:
+  - name: shopfront
+    description: Shopfront e-commerce platform (storefront, catalogue, checkout). Extracted hourly via the Admin API.
+    schema: raw
+    meta:
+      source_system: shopfront
+      owner: platform_engineering
+      domain: commerce
+    tables:
+      - name: customers
+        identifier: shopfront_customers
+        description: Customer accounts created at signup or checkout.
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 48, period: hour}}}
+        meta: {source_object: "Admin API /customers", criticality: high, contains_pii: true}
+      - name: products
+        identifier: shopfront_products
+        description: Product catalogue with current list prices.
+        loaded_at_field: _loaded_at
+        meta: {source_object: "Admin API /products", criticality: medium}
+      - name: orders
+        identifier: shopfront_orders
+        description: Order headers with monetary breakdown (subtotal, discount, shipping, tax, total).
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 6, period: hour}}}
+        meta: {source_object: "Admin API /orders", criticality: critical}
+      - name: order_items
+        identifier: shopfront_order_items
+        description: Order lines; one row per product on an order.
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 6, period: hour}}}
+        meta: {source_object: "Admin API /orders/{id}/line_items", criticality: high}
+
+  - name: payrail
+    description: PayRail payment processor. Captures and refunds streamed via webhooks.
+    schema: raw
+    meta:
+      source_system: payrail
+      owner: platform_engineering
+      domain: payments
+    tables:
+      - name: payments
+        identifier: payrail_payments
+        description: Payment attempts (succeeded, failed, pending) per order.
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 2, period: hour}}}
+        meta: {source_object: "webhook charge.*", criticality: critical}
+      - name: refunds
+        identifier: payrail_refunds
+        description: Refunds issued against captured payments, full or partial.
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 48, period: hour}}}
+        meta: {source_object: "webhook refund.created", criticality: critical}
+
+  - name: rebill
+    description: Rebill subscription billing platform.
+    schema: raw
+    meta:
+      source_system: rebill
+      owner: platform_engineering
+      domain: subscriptions
+    tables:
+      - name: subscriptions
+        identifier: rebill_subscriptions
+        description: Coffee subscription contracts with plan, cadence and lifecycle dates.
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 72, period: hour}}}
+        meta: {source_object: "REST /v2/subscriptions", criticality: high}
+
+  - name: deskline
+    description: Deskline customer support ticketing.
+    schema: raw
+    meta:
+      source_system: deskline
+      owner: platform_engineering
+      domain: customer_experience
+    tables:
+      - name: tickets
+        identifier: deskline_tickets
+        description: Support tickets with channel, priority, resolution and CSAT.
+        loaded_at_field: _loaded_at
+        config: {freshness: {warn_after: {count: 24, period: hour}}}
+        meta: {source_object: "Incremental export /tickets", criticality: medium}
+
+  - name: campaignhub
+    description: CampaignHub marketing campaign management.
+    schema: raw
+    meta:
+      source_system: campaignhub
+      owner: platform_engineering
+      domain: growth
+    tables:
+      - name: campaigns
+        identifier: campaignhub_campaigns
+        description: Marketing campaigns with channel, flight dates and budget.
+        loaded_at_field: _loaded_at
+        meta: {source_object: "Daily CSV drop campaigns.csv", criticality: medium}

@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: datatrust-postgres
+    environment:
+      POSTGRES_DB: ${DATATRUST_DB_NAME:-datatrust}
+      POSTGRES_USER: ${DATATRUST_DB_USER:-datatrust}
+      POSTGRES_PASSWORD: ${DATATRUST_DB_PASSWORD:-datatrust}
+    ports:
+      - "${DATATRUST_DB_PORT:-5432}:5432"
+    volumes:
+      - datatrust_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATATRUST_DB_USER:-datatrust} -d ${DATATRUST_DB_NAME:-datatrust}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  datatrust_pgdata:

@@ -1,0 +1,12 @@
+datatrust:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DATATRUST_DB_HOST', 'localhost') }}"
+      port: "{{ env_var('DATATRUST_DB_PORT', '5432') | as_number }}"
+      dbname: "{{ env_var('DATATRUST_DB_NAME', 'datatrust') }}"
+      user: "{{ env_var('DATATRUST_DB_USER', 'datatrust') }}"
+      password: "{{ env_var('DATATRUST_DB_PASSWORD', 'datatrust') }}"
+      schema: analytics
+      threads: 4

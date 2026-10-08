@@ -1,0 +1,652 @@
+{
+  "suite": "holdout",
+  "detector_version": "baseline",
+  "cases_hash": "1816a6fe7eb56f24",
+  "confusion_matrix": {
+    "true_positives": 28,
+    "false_negatives": 2,
+    "false_positives": 1,
+    "true_negatives": 29,
+    "total": 60,
+    "accuracy": 0.95,
+    "precision": 0.9655,
+    "recall": 0.9333,
+    "f1_score": 0.9492,
+    "specificity": 0.9667
+  },
+  "errors": [
+    {
+      "case_id": "HO-036",
+      "title": "Capture attributed to a different customer than the order",
+      "expected": "defective",
+      "predicted": "valid",
+      "outcome": "FN",
+      "triggered_rules": [],
+      "defect_category": "business_rule"
+    },
+    {
+      "case_id": "HO-050",
+      "title": "Two partial refunds that together exceed the payment",
+      "expected": "defective",
+      "predicted": "valid",
+      "outcome": "FN",
+      "triggered_rules": [],
+      "defect_category": "financial_consistency"
+    },
+    {
+      "case_id": "HO-059",
+      "title": "Fully discounted replacement order with a $0.00 authorisation",
+      "expected": "valid",
+      "predicted": "defective",
+      "outcome": "FP",
+      "triggered_rules": [
+        "payments_succeeded_amount_positive"
+      ],
+      "defect_category": null
+    }
+  ],
+  "predictions": [
+    {
+      "case_id": "HO-001",
+      "title": "Single-line web order paid by card",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-002",
+      "title": "Order header without an order number",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_order_id_not_null"
+      ],
+      "defect_category": "missing_identifier"
+    },
+    {
+      "case_id": "HO-003",
+      "title": "Order credited to an active campaign",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-004",
+      "title": "Order number loaded twice by a sync replay",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_order_id_unique"
+      ],
+      "defect_category": "duplicate_identifier"
+    },
+    {
+      "case_id": "HO-005",
+      "title": "Customer who signed up on launch day",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-006",
+      "title": "Order placed by an unknown customer id",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_customer_exists",
+        "payments_customer_exists"
+      ],
+      "defect_category": "broken_relationship"
+    },
+    {
+      "case_id": "HO-007",
+      "title": "Payment captured three hours before checkout",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_after_order"
+      ],
+      "defect_category": "chronology"
+    },
+    {
+      "case_id": "HO-008",
+      "title": "Failed first attempt then successful retry",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-009",
+      "title": "Split tender with gift card plus card",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-010",
+      "title": "Order missing its customer",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_customer_id_not_null"
+      ],
+      "defect_category": "missing_identifier"
+    },
+    {
+      "case_id": "HO-011",
+      "title": "Order keyed with next year's date",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_ordered_at_not_future",
+        "payments_after_order"
+      ],
+      "defect_category": "invalid_date"
+    },
+    {
+      "case_id": "HO-012",
+      "title": "Returning customer places two orders on the same day",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-013",
+      "title": "Refund larger than the captured payment",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "refunds_not_exceeding_payment"
+      ],
+      "defect_category": "financial_consistency"
+    },
+    {
+      "case_id": "HO-014",
+      "title": "Two partial refunds that exactly add up to the payment",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-015",
+      "title": "Fulfilment partner status 'in_transit'",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_status_accepted_values"
+      ],
+      "defect_category": "invalid_category"
+    },
+    {
+      "case_id": "HO-016",
+      "title": "Renewal order linked to its subscription",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-017",
+      "title": "Payment attempt for an order that never reached Shopfront",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_order_exists"
+      ],
+      "defect_category": "broken_relationship"
+    },
+    {
+      "case_id": "HO-018",
+      "title": "Successful capture with a negative amount",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_paid_amount_matches_total",
+        "payments_succeeded_amount_positive"
+      ],
+      "defect_category": "invalid_numeric"
+    },
+    {
+      "case_id": "HO-019",
+      "title": "UK order with VAT-inclusive pricing and shipping",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-020",
+      "title": "Refund dated before the payment it reverses",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "refunds_after_payment"
+      ],
+      "defect_category": "chronology"
+    },
+    {
+      "case_id": "HO-021",
+      "title": "Prepaid gift subscription active with a future end date",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-022",
+      "title": "Active subscription whose end date has passed",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "subscriptions_active_not_ended"
+      ],
+      "defect_category": "inconsistent_status"
+    },
+    {
+      "case_id": "HO-023",
+      "title": "Cancelled order with a declined card and no capture",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-024",
+      "title": "Order subtotal disagrees with its lines",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_subtotal_matches_items"
+      ],
+      "defect_category": "reconciliation"
+    },
+    {
+      "case_id": "HO-025",
+      "title": "Payment settling two days after checkout",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-026",
+      "title": "Payment captured without an order reference",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_order_id_not_null"
+      ],
+      "defect_category": "missing_identifier"
+    },
+    {
+      "case_id": "HO-027",
+      "title": "Paused subscription with no end date",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-028",
+      "title": "Subscription ended before it started",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "subscriptions_end_after_start"
+      ],
+      "defect_category": "chronology"
+    },
+    {
+      "case_id": "HO-029",
+      "title": "Customer who cancelled and later re-subscribed",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-030",
+      "title": "Payment settled in a different currency than the order",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_currency_matches_order"
+      ],
+      "defect_category": "financial_consistency"
+    },
+    {
+      "case_id": "HO-031",
+      "title": "Order placed one minute before the data cutoff",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-032",
+      "title": "Payment status 'complete' from a legacy integration",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_status_accepted_values"
+      ],
+      "defect_category": "invalid_category"
+    },
+    {
+      "case_id": "HO-033",
+      "title": "Multi-line order across three categories",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-034",
+      "title": "Order line with a negative quantity",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "order_items_quantity_positive"
+      ],
+      "defect_category": "invalid_numeric"
+    },
+    {
+      "case_id": "HO-035",
+      "title": "Single partial refund for a damaged bag",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-036",
+      "title": "Capture attributed to a different customer than the order",
+      "expected": "defective",
+      "predicted": "valid",
+      "outcome": "FN",
+      "triggered_rules": [],
+      "defect_category": "business_rule"
+    },
+    {
+      "case_id": "HO-037",
+      "title": "New customer with no orders yet",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-038",
+      "title": "Order total ignores the tax line",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_total_formula"
+      ],
+      "defect_category": "reconciliation"
+    },
+    {
+      "case_id": "HO-039",
+      "title": "Payment captured in the same second as checkout",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-040",
+      "title": "CSAT rating of 7 on a 1-5 scale",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "tickets_csat_in_range"
+      ],
+      "defect_category": "invalid_numeric"
+    },
+    {
+      "case_id": "HO-041",
+      "title": "Historical order priced before the 2025 price change",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-042",
+      "title": "Refund issued against an unknown payment",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "refunds_payment_exists"
+      ],
+      "defect_category": "broken_relationship"
+    },
+    {
+      "case_id": "HO-043",
+      "title": "CAD order with campaign discount and Canadian tax",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-044",
+      "title": "Ticket solved before it was opened",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "tickets_solved_after_opened"
+      ],
+      "defect_category": "chronology"
+    },
+    {
+      "case_id": "HO-045",
+      "title": "Escalated support ticket still open",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-046",
+      "title": "Subscription in a 'trialing' state Rebill does not define",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "subscriptions_status_accepted_values"
+      ],
+      "defect_category": "invalid_category"
+    },
+    {
+      "case_id": "HO-047",
+      "title": "Biweekly discovery subscription",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-048",
+      "title": "Captured amount differs from the order total",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_paid_amount_matches_total"
+      ],
+      "defect_category": "reconciliation"
+    },
+    {
+      "case_id": "HO-049",
+      "title": "Full refund of a returned order",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-050",
+      "title": "Two partial refunds that together exceed the payment",
+      "expected": "defective",
+      "predicted": "valid",
+      "outcome": "FN",
+      "triggered_rules": [],
+      "defect_category": "financial_consistency"
+    },
+    {
+      "case_id": "HO-051",
+      "title": "Shipped order awaiting delivery",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-052",
+      "title": "Subscription for a customer that does not exist",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "subscriptions_customer_exists"
+      ],
+      "defect_category": "broken_relationship"
+    },
+    {
+      "case_id": "HO-053",
+      "title": "Refund issued the same day as the payment",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-054",
+      "title": "Customer signup before the store launched",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "customers_signup_after_launch"
+      ],
+      "defect_category": "invalid_date"
+    },
+    {
+      "case_id": "HO-055",
+      "title": "Promo order with free shipping",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-056",
+      "title": "Duplicate capture from a webhook retry",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_paid_amount_matches_total",
+        "payments_payment_id_unique"
+      ],
+      "defect_category": "duplicate_identifier"
+    },
+    {
+      "case_id": "HO-057",
+      "title": "General support enquiry with no order attached",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-058",
+      "title": "Discount larger than the order subtotal",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_discount_not_exceeding_subtotal"
+      ],
+      "defect_category": "business_rule"
+    },
+    {
+      "case_id": "HO-059",
+      "title": "Fully discounted replacement order with a $0.00 authorisation",
+      "expected": "valid",
+      "predicted": "defective",
+      "outcome": "FP",
+      "triggered_rules": [
+        "payments_succeeded_amount_positive"
+      ],
+      "defect_category": null
+    },
+    {
+      "case_id": "HO-060",
+      "title": "Order above the free-shipping threshold",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    }
+  ]
+}

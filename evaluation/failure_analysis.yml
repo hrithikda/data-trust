@@ -1,0 +1,48 @@
+# Failure analysis of the baseline detector on the held-out set.
+# Written after inspecting the baseline errors; the improved rules and regression cases follow from it.
+cases:
+  - case_id: HO-050
+    error: false_negative
+    pattern: Aggregate constraint checked row by row
+    why: >
+      Two partial refunds (26.00 and 22.00) were issued against a 44.00 capture. The baseline rule
+      `refunds_not_exceeding_payment` joins each refund to its payment and compares the two amounts. Each refund
+      is individually smaller than the payment, so no row fails, yet together they return 4.00 more than was
+      collected.
+    assumption: >
+      "A refund never exceeds its payment" was encoded as a property of a single refund row. The real invariant is
+      about the set of refunds for a payment: their sum must not exceed what was captured.
+    improvement: >
+      Replace it with `refunds_cumulative_not_exceeding_payment`, an aggregate_reconciliation rule on payments that
+      sums refunds per payment (child_lte_primary, 1 cent tolerance). It catches both the single over-refund and
+      cumulative over-refunding.
+    regression_cases: [RG-001, RG-002, RG-007, RG-010]
+  - case_id: HO-036
+    error: false_negative
+    pattern: Referential checks that are individually valid but jointly inconsistent
+    why: >
+      The capture for order SF3036 (customer C1001) is recorded against customer C1002 after a PayRail account
+      merge. The baseline checks that payment.order_id exists and that payment.customer_id exists, and both do.
+      Nothing compares the two references with each other.
+    assumption: >
+      Each foreign key was treated as an independent relationship. In this model a payment's customer is
+      functionally determined by its order, so the two keys must agree.
+    improvement: >
+      Add `payments_customer_matches_order`, a join_condition rule that flags payments whose customer_id IS
+      DISTINCT FROM the order's customer_id (it also flags a NULL on one side only).
+    regression_cases: [RG-003, RG-009]
+  - case_id: HO-059
+    error: false_positive
+    pattern: Naive numeric bound that ignores a legitimate business process
+    why: >
+      Support replaced a damaged bag with a 100%-discounted order whose total is 0.00. PayRail records a 0.00
+      succeeded authorisation so the order lifecycle completes. The baseline rule
+      `payments_succeeded_amount_positive` requires every succeeded payment to be strictly positive and flags it.
+    assumption: >
+      "Successful payments move money." True for every normal sale, but zero-total orders such as support
+      replacements and fully covered promotions legitimately produce 0.00 successful authorisations.
+    improvement: >
+      Replace it with `payments_succeeded_amount_valid`: a succeeded payment is invalid if it is negative, or if it
+      is 0.00 and its order total is not 0.00 (including when the order does not exist). The exemption is as narrow
+      as the business rule, so it does not hide $0 captures on orders that cost money.
+    regression_cases: [RG-004, RG-005, RG-006, RG-008]

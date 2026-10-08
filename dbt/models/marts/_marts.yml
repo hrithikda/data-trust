@@ -1,0 +1,194 @@
+version: 2
+
+models:
+  # ----------------------------------------------------------------- core
+  - name: dim_customers
+    description: Conformed customer dimension combining profile, purchase history and subscription status.
+    config:
+      meta: {owner: customer_data, domain: customer, criticality: critical, primary_key: [customer_id], contains_pii: true}
+    columns:
+      - name: customer_id
+        description: Shopfront customer identifier.
+        config: {meta: {critical: true, cde_category: customer_identifier, critical_reason: "Conformed customer key across marts."}}
+        data_tests: [unique, not_null]
+      - name: email
+        description: Lowercased email address.
+        config: {meta: {pii: true}}
+      - name: customer_status
+        description: Lifecycle status from Shopfront.
+        config: {meta: {critical: true, cde_category: status, critical_reason: "Active customer definition."}}
+      - name: order_count
+        description: Revenue orders placed.
+      - name: lifetime_net_revenue
+        description: Net revenue across all orders.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Basis of CLV."}}
+      - name: mrr
+        description: Monthly recurring revenue from active subscriptions.
+      - name: is_subscriber
+        description: Has at least one active subscription.
+      - name: days_since_last_order
+        description: Days between the last order and the reference date.
+
+  - name: dim_products
+    description: Product dimension with lifetime units and gross sales from revenue orders.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: medium, primary_key: [product_id]}
+    columns:
+      - name: product_id
+        description: Shopfront product identifier.
+        data_tests: [unique, not_null]
+      - name: gross_sales
+        description: Sum of line amounts on revenue orders.
+
+  - name: fct_orders
+    description: Order fact - one row per order with revenue, cash position and customer attributes. Source of truth for revenue marts.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: critical, primary_key: [order_id],
+             freshness_column: ordered_at, freshness_sla_hours: 24}
+    columns:
+      - name: order_id
+        description: Shopfront order number.
+        config: {meta: {critical: true, cde_category: identifier, critical_reason: "Order grain for revenue reporting."}}
+        data_tests: [unique, not_null]
+      - name: customer_id
+        description: Purchasing customer.
+        config: {meta: {critical: true, cde_category: customer_identifier, critical_reason: "Customer revenue attribution."}}
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_customers'), field: customer_id}
+      - name: order_status
+        description: Fulfilment status.
+      - name: total_amount
+        description: Amount charged.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Reconciled to cash."}}
+      - name: net_revenue
+        description: Recognised net revenue for the order.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Canonical revenue measure."}}
+      - name: ordered_at
+        description: Checkout timestamp.
+        config: {meta: {critical: true, cde_category: temporal, critical_reason: "Revenue period."}}
+      - name: customer_country_code
+        description: Customer country at the time of reporting (null when the customer is unknown).
+
+  - name: fct_payments
+    description: Payment fact - one row per PayRail attempt with refunds and order context.
+    config:
+      meta: {owner: payments, domain: payments, criticality: critical, primary_key: [payment_id],
+             freshness_column: processed_at, freshness_sla_hours: 6}
+    columns:
+      - name: payment_id
+        description: PayRail charge identifier.
+        config: {meta: {critical: true, cde_category: identifier, critical_reason: "Cash reconciliation grain."}}
+        data_tests: [unique, not_null]
+      - name: amount
+        description: Amount captured.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Cash collected."}}
+      - name: refunded_amount
+        description: Refunds issued against the payment.
+      - name: net_amount
+        description: Captured minus refunded.
+      - name: minutes_from_checkout
+        description: Minutes between checkout and payment processing (negative values indicate clock problems).
+
+  - name: fct_subscriptions
+    description: Subscription fact with plan, lifecycle and MRR contribution.
+    config:
+      meta: {owner: commerce, domain: subscriptions, criticality: critical, primary_key: [subscription_id]}
+    columns:
+      - name: subscription_id
+        description: Rebill subscription identifier.
+        data_tests: [unique, not_null]
+      - name: subscription_status
+        description: Rebill lifecycle status.
+        config: {meta: {critical: true, cde_category: status, critical_reason: "Active subscription definition."}}
+      - name: mrr
+        description: MRR contribution.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Monthly recurring revenue."}}
+
+  # ----------------------------------------------------------------- finance
+  - name: fct_daily_revenue
+    description: Daily revenue by currency on an order-date basis (revenue orders only).
+    config:
+      meta: {owner: finance_analytics, domain: finance, criticality: critical, primary_key: [order_date, currency],
+             freshness_column: order_date, freshness_sla_hours: 30}
+    columns:
+      - name: order_date
+        description: Revenue date.
+      - name: net_revenue
+        description: Net revenue for the day.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Daily revenue reporting."}}
+      - name: refunds
+        description: Refunds on orders placed that day.
+
+  - name: fin_monthly_revenue_close
+    description: Month-end close pack - recognised revenue alongside PayRail cash collected and refunded, by currency.
+    config:
+      meta: {owner: finance_analytics, domain: finance, criticality: critical, primary_key: [revenue_month, currency]}
+    columns:
+      - name: revenue_month
+        description: First day of the reporting month.
+      - name: net_revenue
+        description: Recognised net revenue.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Reported in the monthly close."}}
+      - name: cash_collected
+        description: Succeeded PayRail captures in the month.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Cash reconciliation."}}
+
+  # ----------------------------------------------------------------- customer
+  - name: customer_lifetime_value
+    description: Realised net revenue plus a 12-month forward estimate per purchasing customer, with loyalty tier.
+    config:
+      meta: {owner: customer_data, domain: customer, criticality: high, primary_key: [customer_id]}
+    columns:
+      - name: customer_id
+        description: Shopfront customer identifier.
+        data_tests: [unique]
+      - name: customer_lifetime_value
+        description: historical_value + predicted_12m_value.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Drives loyalty tiers shown to customers."}}
+      - name: clv_tier
+        description: platinum (>= 1000), gold (>= 400), silver (>= 150), bronze.
+
+  - name: customer_health_scores
+    description: Customer health score (0-100) from recency, subscription status, support experience and value.
+    config:
+      meta: {owner: customer_data, domain: customer, criticality: high, primary_key: [customer_id]}
+    columns:
+      - name: customer_id
+        description: Shopfront customer identifier.
+        data_tests: [unique]
+      - name: health_score
+        description: Sum of recency, subscription, support and value points (0-100).
+      - name: health_band
+        description: healthy (>= 70), at_risk (>= 40), critical.
+
+  # ----------------------------------------------------------------- growth
+  - name: campaign_performance
+    description: Campaign ROI - attributed orders and revenue, new customers, ROAS and customer acquisition cost.
+    config:
+      meta: {owner: growth_analytics, domain: growth, criticality: medium, primary_key: [campaign_id]}
+    columns:
+      - name: campaign_id
+        description: CampaignHub campaign identifier.
+        data_tests: [unique]
+      - name: roas
+        description: attributed_revenue / budget_amount.
+      - name: customer_acquisition_cost
+        description: budget_amount / new_customers.
+
+  # ----------------------------------------------------------------- executive
+  - name: rpt_executive_kpis
+    description: Monthly executive scorecard - net revenue, active customers, MRR, marketing efficiency and customer health.
+    config:
+      meta: {owner: finance_analytics, domain: executive, criticality: critical, primary_key: [revenue_month]}
+    columns:
+      - name: revenue_month
+        description: First day of the month.
+      - name: net_revenue
+        description: Net revenue across currencies (face value).
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Board-reported revenue."}}
+      - name: ending_mrr
+        description: MRR of subscriptions active at month end.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Board-reported recurring revenue."}}
+      - name: active_customers
+        description: Distinct customers with a revenue order in the month.

@@ -1,0 +1,407 @@
+version: 2
+
+# Metadata conventions consumed by DataTrust (see README "Metadata conventions"):
+#   model  config.meta: owner, domain, criticality, primary_key, freshness_column,
+#                       freshness_sla_hours, loaded_at_column, contains_pii
+#   column config.meta: critical, cde_category, critical_reason, pii
+
+models:
+  - name: stg_shopfront__customers
+    description: >
+      One row per Shopfront customer account. Emails are normalised to lowercase. Customer status is
+      maintained by the storefront's lifecycle job (active / inactive / churned).
+    config:
+      meta: {owner: customer_data, domain: customer, criticality: critical, primary_key: [customer_id],
+             freshness_column: signed_up_at, freshness_sla_hours: 48, loaded_at_column: loaded_at, contains_pii: true}
+    columns:
+      - name: customer_id
+        data_type: text
+        description: Shopfront customer identifier (C + 6 digits). Joins every customer-level dataset.
+        config:
+          meta: {critical: true, cde_category: customer_identifier, critical_reason: "Primary customer key used by finance, CRM and loyalty."}
+        data_tests: [not_null, unique]
+      - name: email
+        data_type: text
+        description: Lowercased login and marketing email address.
+        config: {meta: {pii: true}}
+      - name: first_name
+        data_type: text
+        description: Customer given name.
+        config: {meta: {pii: true}}
+      - name: last_name
+        data_type: text
+        description: Customer family name.
+        config: {meta: {pii: true}}
+      - name: country_code
+        data_type: text
+        description: ISO-3166 alpha-2 shipping country (US, CA, GB). Determines currency and tax.
+      - name: acquisition_channel
+        data_type: text
+        description: Marketing channel credited with the signup (first touch).
+      - name: customer_status
+        data_type: text
+        description: Lifecycle status maintained by Shopfront (active, inactive, churned).
+        config:
+          meta: {critical: true, cde_category: status, critical_reason: "Drives active-customer counts in executive reporting."}
+        data_tests:
+          - accepted_values:
+              arguments: {values: [active, inactive, churned]}
+      - name: signed_up_at
+        data_type: timestamp
+        description: Account creation timestamp (UTC).
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_shopfront__products
+    description: Product catalogue with current list prices. Historical order prices live on order lines.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: medium, primary_key: [product_id], loaded_at_column: loaded_at}
+    columns:
+      - name: product_id
+        data_type: text
+        description: Shopfront product identifier.
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Joins order lines to the catalogue."}
+        data_tests: [not_null, unique]
+      - name: sku
+        data_type: text
+        description: Warehouse stock keeping unit.
+      - name: product_name
+        data_type: text
+        description: Customer-facing product name.
+      - name: category
+        data_type: text
+        description: Merchandising category (whole_bean, ground, espresso, single_origin, equipment, ...).
+      - name: list_price
+        data_type: numeric(10, 2)
+        description: Current list price in the store's base currency.
+      - name: is_active
+        data_type: boolean
+        description: Whether the product is currently for sale.
+      - name: launched_on
+        data_type: date
+        description: Date the product was first sold.
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_shopfront__orders
+    description: >
+      One row per Shopfront order header. total_amount = subtotal_amount - discount_amount + shipping_amount + tax_amount.
+      Subscription renewals are created by Rebill as orders with sales_channel = 'subscription'.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: critical, primary_key: [order_id],
+             freshness_column: ordered_at, freshness_sla_hours: 24, loaded_at_column: loaded_at}
+    columns:
+      - name: order_id
+        data_type: text
+        description: Shopfront order number (SF + 7 digits).
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Order grain for revenue, payments and fulfilment reporting."}
+        data_tests: [not_null, unique]
+      - name: customer_id
+        data_type: text
+        description: Purchasing customer.
+        config:
+          meta: {critical: true, cde_category: customer_identifier, critical_reason: "Attributes revenue to customers (CLV, health, cohorts)."}
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('stg_shopfront__customers'), field: customer_id}
+      - name: subscription_id
+        data_type: text
+        description: Rebill subscription that generated the order (renewals only).
+      - name: campaign_id
+        data_type: text
+        description: CampaignHub campaign whose promo code was applied, if any.
+      - name: order_status
+        data_type: text
+        description: Fulfilment status (placed, shipped, delivered, cancelled, returned).
+        config:
+          meta: {critical: true, cde_category: status, critical_reason: "Cancelled and returned orders are excluded from revenue."}
+        data_tests:
+          - accepted_values:
+              arguments: {values: [placed, shipped, delivered, cancelled, returned]}
+      - name: sales_channel
+        data_type: text
+        description: Origin of the order (web, app, subscription, support_replacement).
+      - name: currency
+        data_type: text
+        description: ISO-4217 settlement currency.
+      - name: subtotal_amount
+        data_type: numeric(12, 2)
+        description: Sum of order line amounts before discounts.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Basis of gross sales."}
+      - name: discount_amount
+        data_type: numeric(12, 2)
+        description: Promotional discount applied to the order.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Reduces recognised revenue."}
+      - name: shipping_amount
+        data_type: numeric(12, 2)
+        description: Shipping charged to the customer.
+      - name: tax_amount
+        data_type: numeric(12, 2)
+        description: Sales tax collected (VAT-inclusive pricing in GB).
+      - name: total_amount
+        data_type: numeric(12, 2)
+        description: Amount the customer was charged.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Reconciled against PayRail captures at month-end close."}
+      - name: ordered_at
+        data_type: timestamp
+        description: Checkout timestamp (UTC).
+        config:
+          meta: {critical: true, cde_category: temporal, critical_reason: "Determines the revenue reporting period."}
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_shopfront__order_items
+    description: One row per order line. line_amount = quantity * unit_price at the time of purchase.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: high, primary_key: [order_item_id], loaded_at_column: loaded_at}
+    columns:
+      - name: order_item_id
+        data_type: text
+        description: Order line identifier (order_id + line number).
+        data_tests: [not_null, unique]
+      - name: order_id
+        data_type: text
+        description: Parent order.
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Ties line revenue to its order."}
+        data_tests: [not_null]
+      - name: product_id
+        data_type: text
+        description: Product sold.
+        data_tests:
+          - relationships:
+              arguments: {to: ref('stg_shopfront__products'), field: product_id}
+      - name: quantity
+        data_type: integer
+        description: Units sold on the line.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Drives units and line revenue."}
+      - name: unit_price
+        data_type: numeric(10, 2)
+        description: Price per unit charged at checkout (may differ from today's list price).
+      - name: line_amount
+        data_type: numeric(12, 2)
+        description: quantity * unit_price.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Summed into order subtotals and product revenue."}
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_payrail__payments
+    description: >
+      One row per PayRail payment attempt. An order can have several attempts (failed retries, split tenders
+      such as gift card + card). Only succeeded attempts move money.
+    config:
+      meta: {owner: payments, domain: payments, criticality: critical, primary_key: [payment_id],
+             freshness_column: processed_at, freshness_sla_hours: 6, loaded_at_column: loaded_at}
+    columns:
+      - name: payment_id
+        data_type: text
+        description: PayRail charge identifier.
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Grain of cash reconciliation."}
+        data_tests: [not_null, unique]
+      - name: order_id
+        data_type: text
+        description: Shopfront order the payment settles.
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Links cash to orders for revenue reconciliation."}
+        data_tests: [not_null]
+      - name: customer_id
+        data_type: text
+        description: Customer on the PayRail account that was charged.
+        config:
+          meta: {critical: true, cde_category: customer_identifier, critical_reason: "Used for chargeback handling and customer cash history."}
+      - name: payment_method
+        data_type: text
+        description: Tender type (card, paypal, apple_pay, gift_card).
+      - name: payment_status
+        data_type: text
+        description: Outcome of the attempt (succeeded, failed, pending).
+        config:
+          meta: {critical: true, cde_category: status, critical_reason: "Only succeeded payments count as collected cash."}
+        data_tests:
+          - accepted_values:
+              arguments: {values: [succeeded, failed, pending]}
+      - name: amount
+        data_type: numeric(12, 2)
+        description: Amount authorised or captured.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Cash collected; reconciled at month-end close."}
+      - name: currency
+        data_type: text
+        description: Settlement currency.
+      - name: processed_at
+        data_type: timestamp
+        description: When PayRail processed the attempt (UTC).
+        config:
+          meta: {critical: true, cde_category: temporal, critical_reason: "Determines the cash period."}
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_payrail__refunds
+    description: One row per refund. A payment may be refunded several times (partial refunds) up to its amount.
+    config:
+      meta: {owner: payments, domain: payments, criticality: critical, primary_key: [refund_id],
+             freshness_column: refunded_at, freshness_sla_hours: 48, loaded_at_column: loaded_at}
+    columns:
+      - name: refund_id
+        data_type: text
+        description: PayRail refund identifier.
+        data_tests: [not_null, unique]
+      - name: payment_id
+        data_type: text
+        description: Payment being refunded.
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Links refunds to the cash they reverse."}
+        data_tests:
+          - relationships:
+              arguments: {to: ref('stg_payrail__payments'), field: payment_id}
+      - name: refund_amount
+        data_type: numeric(12, 2)
+        description: Amount returned to the customer.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Reduces net revenue."}
+      - name: refund_reason
+        data_type: text
+        description: Reason code selected by the agent or returns flow.
+      - name: refunded_at
+        data_type: timestamp
+        description: When the refund was issued (UTC).
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_rebill__subscriptions
+    description: >
+      One row per Rebill subscription contract. monthly_amount normalises biweekly plans (price * 26 / 12).
+      Active subscriptions may carry a future ended_on when the term is prepaid.
+    config:
+      meta: {owner: commerce, domain: subscriptions, criticality: critical, primary_key: [subscription_id],
+             freshness_column: started_on, freshness_sla_hours: 72, loaded_at_column: loaded_at}
+    columns:
+      - name: subscription_id
+        data_type: text
+        description: Rebill subscription identifier.
+        config:
+          meta: {critical: true, cde_category: identifier, critical_reason: "Grain of MRR reporting."}
+        data_tests: [not_null, unique]
+      - name: customer_id
+        data_type: text
+        description: Subscribing customer.
+        config:
+          meta: {critical: true, cde_category: customer_identifier, critical_reason: "Links recurring revenue to customers."}
+        data_tests:
+          - relationships:
+              arguments: {to: ref('stg_shopfront__customers'), field: customer_id}
+      - name: plan_code
+        data_type: text
+        description: Subscription plan (CLASSIC_MONTHLY, DOUBLE_MONTHLY, ESPRESSO_CLUB, DISCOVERY_BIWEEKLY).
+      - name: subscription_status
+        data_type: text
+        description: Lifecycle status (active, paused, cancelled).
+        config:
+          meta: {critical: true, cde_category: status, critical_reason: "Defines active subscriptions and MRR."}
+      - name: billing_interval
+        data_type: text
+        description: Billing cadence (monthly, biweekly).
+      - name: price_per_cycle
+        data_type: numeric(10, 2)
+        description: Amount billed each cycle.
+      - name: monthly_amount
+        data_type: numeric(10, 2)
+        description: Price normalised to a calendar month.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Summed into monthly recurring revenue."}
+      - name: started_on
+        data_type: date
+        description: First billing date.
+      - name: ended_on
+        data_type: date
+        description: Cancellation effective date or scheduled end of a prepaid term.
+        config:
+          meta: {critical: true, cde_category: temporal, critical_reason: "Determines whether a subscription is still active."}
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_deskline__tickets
+    description: One row per Deskline support ticket. order_id is optional (general enquiries).
+    config:
+      meta: {owner: customer_experience, domain: customer_experience, criticality: medium, primary_key: [ticket_id],
+             freshness_column: opened_at, freshness_sla_hours: 24, loaded_at_column: loaded_at}
+    columns:
+      - name: ticket_id
+        data_type: text
+        description: Deskline ticket number.
+        data_tests: [not_null, unique]
+      - name: customer_id
+        data_type: text
+        description: Customer who raised the ticket.
+        config:
+          meta: {critical: true, cde_category: customer_identifier, critical_reason: "Feeds customer health scoring."}
+      - name: order_id
+        data_type: text
+        description: Related order, when the enquiry is about a specific order.
+      - name: channel
+        data_type: text
+        description: Contact channel (email, chat, phone, social). Descriptive only.
+      - name: priority
+        data_type: text
+        description: Agent-assigned priority (low, normal, high, urgent).
+      - name: ticket_status
+        data_type: text
+        description: Ticket state (open, pending, solved, closed).
+      - name: opened_at
+        data_type: timestamp
+        description: When the ticket was created (UTC).
+      - name: solved_at
+        data_type: timestamp
+        description: When the ticket was solved (UTC); null while open.
+      - name: csat_score
+        data_type: integer
+        description: Post-resolution satisfaction rating (1-5), when the customer responded.
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.
+
+  - name: stg_campaignhub__campaigns
+    description: One row per marketing campaign flight.
+    config:
+      meta: {owner: growth_analytics, domain: growth, criticality: medium, primary_key: [campaign_id], loaded_at_column: loaded_at}
+    columns:
+      - name: campaign_id
+        data_type: text
+        description: CampaignHub campaign identifier.
+        data_tests: [not_null, unique]
+      - name: campaign_name
+        data_type: text
+        description: Human-readable campaign name.
+      - name: channel
+        data_type: text
+        description: Paid or owned channel the campaign ran on.
+      - name: started_on
+        data_type: date
+        description: First day of the flight.
+      - name: ended_on
+        data_type: date
+        description: Last day of the flight.
+      - name: budget_amount
+        data_type: numeric(12, 2)
+        description: Planned spend for the flight.
+        config:
+          meta: {critical: true, cde_category: financial, critical_reason: "Denominator of ROAS and CAC."}
+      - name: loaded_at
+        data_type: timestamp
+        description: When the row landed in the warehouse.

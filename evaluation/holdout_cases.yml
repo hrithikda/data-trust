@@ -1,0 +1,751 @@
+# Held-out evaluation set for the DataTrust quality detector.
+#
+# 60 labelled cases: 30 contain a genuine defect, 30 are valid (including legitimate edge cases).
+# These cases were authored separately from the rule-development fixtures in tests/ and from
+# the defects injected into the synthetic warehouse; the detector never sees the labels.
+#
+# A case is a handful of records across staging tables. The evaluator loads `context` (shared
+# reference data: customers, products, a campaign) plus one case into an empty sandbox schema,
+# runs every rule of the detector version, and predicts "defective" if any rule fails.
+# Monetary convention: total = subtotal - discount + shipping + tax (US tax 7.2%, CA 5%, GB VAT-inclusive).
+
+suite: holdout
+description: Held-out cases used to measure detection performance of each detector version.
+reference_ts: "2026-06-30 23:59:59"
+
+context:
+  stg_shopfront__customers:
+    - {customer_id: C1001, email: ava.kim@example.com, first_name: Ava, last_name: Kim, country_code: US, acquisition_channel: paid_search, customer_status: active, signed_up_at: "2025-01-10 09:00:00"}
+    - {customer_id: C1002, email: noah.tremblay@example.com, first_name: Noah, last_name: Tremblay, country_code: CA, acquisition_channel: organic_search, customer_status: active, signed_up_at: "2025-03-05 14:20:00"}
+    - {customer_id: C1003, email: mia.hughes@example.com, first_name: Mia, last_name: Hughes, country_code: GB, acquisition_channel: referral, customer_status: active, signed_up_at: "2024-04-01 11:00:00"}
+    - {customer_id: C1004, email: leo.garcia@example.com, first_name: Leo, last_name: Garcia, country_code: US, acquisition_channel: email, customer_status: active, signed_up_at: "2025-08-20 18:45:00"}
+    - {customer_id: C1005, email: zoe.walker@example.com, first_name: Zoe, last_name: Walker, country_code: US, acquisition_channel: influencer, customer_status: active, signed_up_at: "2026-05-28 08:10:00"}
+  stg_shopfront__products:
+    - {product_id: P01, sku: CL-HB-12, product_name: House Blend Whole Bean 12oz, category: whole_bean, list_price: 16.00, is_active: true, launched_on: "2023-06-01"}
+    - {product_id: P02, sku: CL-ER-12, product_name: Ember Espresso Roast 12oz, category: espresso, list_price: 18.50, is_active: true, launched_on: "2023-06-01"}
+    - {product_id: P03, sku: CL-EQ-V60, product_name: Ceramic Pour-Over Dripper, category: equipment, list_price: 28.00, is_active: true, launched_on: "2023-06-01"}
+    - {product_id: P04, sku: CL-SB-CLS, product_name: Classic Subscription Box, category: subscription_box, list_price: 18.00, is_active: true, launched_on: "2023-06-01"}
+  stg_campaignhub__campaigns:
+    - {campaign_id: CMP01, campaign_name: 2026 Summer Espresso - Paid Social, channel: paid_social, started_on: "2026-06-01", ended_on: "2026-06-30", budget_amount: 12000.00}
+
+cases:
+  - id: HO-001
+    title: Single-line web order paid by card
+    expected: valid
+    description: Two bags of House Blend, US tax, free of discounts; one successful card capture for the full total.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3001, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 32.00, discount_amount: 0, shipping_amount: 0, tax_amount: 2.30, total_amount: 34.30, ordered_at: "2026-06-02 10:15:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3001-1, order_id: SF3001, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3001, order_id: SF3001, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 34.30, currency: USD, processed_at: "2026-06-02 10:16:40"}
+
+  - id: HO-002
+    title: Order header without an order number
+    expected: defective
+    defect_category: missing_identifier
+    description: A back-office order arrived with a null order_id, so its lines and payments can never be joined to it.
+    records:
+      stg_shopfront__orders:
+        - {order_id: null, customer_id: C1004, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-03 18:20:00"}
+
+  - id: HO-003
+    title: Order credited to an active campaign
+    expected: valid
+    description: Promo code from the June espresso campaign gives 15% off; shipping charged below the $40 threshold.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3003, customer_id: C1005, campaign_id: CMP01, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 37.00, discount_amount: 5.55, shipping_amount: 5.95, tax_amount: 2.26, total_amount: 39.66, ordered_at: "2026-06-08 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3003-1, order_id: SF3003, product_id: P02, quantity: 2, unit_price: 18.50, line_amount: 37.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3003, order_id: SF3003, customer_id: C1005, payment_method: apple_pay, payment_status: succeeded, amount: 39.66, currency: USD, processed_at: "2026-06-08 12:01:10"}
+
+  - id: HO-004
+    title: Order number loaded twice by a sync replay
+    expected: defective
+    defect_category: duplicate_identifier
+    description: The Shopfront sync replayed a batch and the same order header landed twice.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3004, customer_id: C1002, order_status: delivered, sales_channel: app, currency: CAD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.93, total_amount: 27.38, ordered_at: "2026-06-10 09:05:00"}
+        - {order_id: SF3004, customer_id: C1002, order_status: delivered, sales_channel: app, currency: CAD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.93, total_amount: 27.38, ordered_at: "2026-06-10 09:05:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3004-1, order_id: SF3004, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3004, order_id: SF3004, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 27.38, currency: CAD, processed_at: "2026-06-10 09:06:00"}
+
+  - id: HO-005
+    title: Customer who signed up on launch day
+    expected: valid
+    description: An early adopter whose signup timestamp is the storefront launch date - the earliest legitimate value.
+    records:
+      stg_shopfront__customers:
+        - {customer_id: C1011, email: early.bird@example.com, first_name: Theo, last_name: Wright, country_code: US, acquisition_channel: organic_search, customer_status: inactive, signed_up_at: "2023-06-01 08:00:00"}
+
+  - id: HO-006
+    title: Order placed by an unknown customer id
+    expected: defective
+    defect_category: broken_relationship
+    description: The order and its capture reference customer C9999, which does not exist in Shopfront.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3006, customer_id: C9999, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-11 14:30:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3006-1, order_id: SF3006, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3006, order_id: SF3006, customer_id: C9999, payment_method: card, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-11 14:31:00"}
+
+  - id: HO-007
+    title: Payment captured three hours before checkout
+    expected: defective
+    defect_category: chronology
+    description: PayRail stamped the capture at 11:00 for an order placed at 14:00 the same day.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3007, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.33, total_amount: 25.78, ordered_at: "2026-06-12 14:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3007-1, order_id: SF3007, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3007, order_id: SF3007, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 25.78, currency: USD, processed_at: "2026-06-12 11:00:00"}
+
+  - id: HO-008
+    title: Failed first attempt then successful retry
+    expected: valid
+    description: The card was declined, the customer retried with PayPal five minutes later and the capture succeeded.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3008, customer_id: C1004, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-04 08:30:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3008-1, order_id: SF3008, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3008A, order_id: SF3008, customer_id: C1004, payment_method: card, payment_status: failed, amount: 23.10, currency: USD, processed_at: "2026-06-04 08:31:00"}
+        - {payment_id: PAY3008B, order_id: SF3008, customer_id: C1004, payment_method: paypal, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-04 08:36:00"}
+
+  - id: HO-009
+    title: Split tender with gift card plus card
+    expected: valid
+    description: A $25 gift card covers part of the order and a card capture covers the remainder; together they equal the total.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3009, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 60.00, discount_amount: 0, shipping_amount: 0, tax_amount: 4.32, total_amount: 64.32, ordered_at: "2026-06-05 19:45:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3009-1, order_id: SF3009, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF3009-2, order_id: SF3009, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3009A, order_id: SF3009, customer_id: C1001, payment_method: gift_card, payment_status: succeeded, amount: 25.00, currency: USD, processed_at: "2026-06-05 19:46:00"}
+        - {payment_id: PAY3009B, order_id: SF3009, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 39.32, currency: USD, processed_at: "2026-06-05 19:46:05"}
+
+  - id: HO-010
+    title: Order missing its customer
+    expected: defective
+    defect_category: missing_identifier
+    description: An app order was written without a customer_id; the capture also lacks one.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3010, customer_id: null, order_status: delivered, sales_channel: app, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-13 07:10:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3010-1, order_id: SF3010, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3010, order_id: SF3010, customer_id: null, payment_method: card, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-13 07:11:00"}
+
+  - id: HO-011
+    title: Order keyed with next year's date
+    expected: defective
+    defect_category: invalid_date
+    description: A manually entered order is dated June 2027 although it was paid in June 2026.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3011, customer_id: C1002, order_status: delivered, sales_channel: app, currency: CAD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.80, total_amount: 24.75, ordered_at: "2027-06-14 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3011-1, order_id: SF3011, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3011, order_id: SF3011, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 24.75, currency: CAD, processed_at: "2026-06-14 10:01:00"}
+
+  - id: HO-012
+    title: Returning customer places two orders on the same day
+    expected: valid
+    description: Two separate CAD orders from the same customer, each with its own line and capture.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3012A, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.93, total_amount: 27.38, ordered_at: "2026-06-15 09:00:00"}
+        - {order_id: SF3012B, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 28.00, discount_amount: 0, shipping_amount: 7.95, tax_amount: 1.40, total_amount: 37.35, ordered_at: "2026-06-15 17:30:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3012A-1, order_id: SF3012A, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+        - {order_item_id: SF3012B-1, order_id: SF3012B, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3012A, order_id: SF3012A, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 27.38, currency: CAD, processed_at: "2026-06-15 09:01:00"}
+        - {payment_id: PAY3012B, order_id: SF3012B, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 37.35, currency: CAD, processed_at: "2026-06-15 17:31:00"}
+
+  - id: HO-013
+    title: Refund larger than the captured payment
+    expected: defective
+    defect_category: financial_consistency
+    description: An agent keyed a $55.00 refund against a $40.25 capture.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3013, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 32.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.30, total_amount: 40.25, ordered_at: "2026-06-06 11:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3013-1, order_id: SF3013, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3013, order_id: SF3013, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 40.25, currency: USD, processed_at: "2026-06-06 11:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3013, payment_id: PAY3013, refund_amount: 55.00, refund_reason: damaged_in_transit, refunded_at: "2026-06-12 10:00:00"}
+
+  - id: HO-014
+    title: Two partial refunds that exactly add up to the payment
+    expected: valid
+    description: A damaged-bag refund followed by a quality refund; together they return exactly the captured amount.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3014, customer_id: C1004, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 37.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.66, total_amount: 45.61, ordered_at: "2026-06-07 16:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3014-1, order_id: SF3014, product_id: P02, quantity: 2, unit_price: 18.50, line_amount: 37.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3014, order_id: SF3014, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 45.61, currency: USD, processed_at: "2026-06-07 16:02:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3014A, payment_id: PAY3014, refund_amount: 20.00, refund_reason: damaged_in_transit, refunded_at: "2026-06-10 09:00:00"}
+        - {refund_id: RF3014B, payment_id: PAY3014, refund_amount: 25.61, refund_reason: quality_complaint, refunded_at: "2026-06-11 13:00:00"}
+
+  - id: HO-015
+    title: Fulfilment partner status 'in_transit'
+    expected: defective
+    defect_category: invalid_category
+    description: The 3PL integration wrote an order status that Shopfront does not define.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3015, customer_id: C1005, order_status: in_transit, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-20 13:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3015-1, order_id: SF3015, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3015, order_id: SF3015, customer_id: C1005, payment_method: card, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-20 13:01:00"}
+
+  - id: HO-016
+    title: Renewal order linked to its subscription
+    expected: valid
+    description: Rebill created the monthly Classic box renewal; no shipping on subscription orders.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3016, customer_id: C1001, plan_code: CLASSIC_MONTHLY, subscription_status: active, billing_interval: monthly, price_per_cycle: 18.00, monthly_amount: 18.00, started_on: "2026-01-05", ended_on: null}
+      stg_shopfront__orders:
+        - {order_id: SF3016, customer_id: C1001, subscription_id: SUB3016, order_status: delivered, sales_channel: subscription, currency: USD, subtotal_amount: 18.00, discount_amount: 0, shipping_amount: 0, tax_amount: 1.30, total_amount: 19.30, ordered_at: "2026-06-05 06:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3016-1, order_id: SF3016, product_id: P04, quantity: 1, unit_price: 18.00, line_amount: 18.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3016, order_id: SF3016, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 19.30, currency: USD, processed_at: "2026-06-05 06:00:30"}
+
+  - id: HO-017
+    title: Payment attempt for an order that never reached Shopfront
+    expected: defective
+    defect_category: broken_relationship
+    description: A declined attempt references order SF9999, which does not exist.
+    records:
+      stg_payrail__payments:
+        - {payment_id: PAY3017, order_id: SF9999, customer_id: C1001, payment_method: card, payment_status: failed, amount: 42.00, currency: USD, processed_at: "2026-06-18 20:00:00"}
+
+  - id: HO-018
+    title: Successful capture with a negative amount
+    expected: defective
+    defect_category: invalid_numeric
+    description: A chargeback reversal was posted as a succeeded capture of -23.45.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3018, customer_id: C1003, order_status: delivered, sales_channel: web, currency: GBP, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 4.95, tax_amount: 0, total_amount: 23.45, ordered_at: "2026-06-09 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3018-1, order_id: SF3018, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3018, order_id: SF3018, customer_id: C1003, payment_method: card, payment_status: succeeded, amount: -23.45, currency: GBP, processed_at: "2026-06-09 12:01:00"}
+
+  - id: HO-019
+    title: UK order with VAT-inclusive pricing and shipping
+    expected: valid
+    description: GB prices include VAT, so tax_amount is zero; standard UK shipping applies.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3019, customer_id: C1003, order_status: delivered, sales_channel: web, currency: GBP, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 4.95, tax_amount: 0, total_amount: 20.95, ordered_at: "2026-06-16 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3019-1, order_id: SF3019, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3019, order_id: SF3019, customer_id: C1003, payment_method: card, payment_status: succeeded, amount: 20.95, currency: GBP, processed_at: "2026-06-16 10:01:00"}
+
+  - id: HO-020
+    title: Refund dated before the payment it reverses
+    expected: defective
+    defect_category: chronology
+    description: The refund is timestamped a day before the capture it refunds.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3020, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 28.00, discount_amount: 0, shipping_amount: 7.95, tax_amount: 1.40, total_amount: 37.35, ordered_at: "2026-06-15 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3020-1, order_id: SF3020, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3020, order_id: SF3020, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 37.35, currency: CAD, processed_at: "2026-06-15 10:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3020, payment_id: PAY3020, refund_amount: 10.00, refund_reason: late_delivery, refunded_at: "2026-06-14 09:00:00"}
+
+  - id: HO-021
+    title: Prepaid gift subscription active with a future end date
+    expected: valid
+    description: A six-month prepaid Espresso Club gift is active and scheduled to end in December.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3021, customer_id: C1005, plan_code: ESPRESSO_CLUB, subscription_status: active, billing_interval: monthly, price_per_cycle: 26.00, monthly_amount: 26.00, started_on: "2026-06-01", ended_on: "2026-12-31"}
+
+  - id: HO-022
+    title: Active subscription whose end date has passed
+    expected: defective
+    defect_category: inconsistent_status
+    description: The subscription ended in April but Rebill still reports it as active.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3022, customer_id: C1004, plan_code: DOUBLE_MONTHLY, subscription_status: active, billing_interval: monthly, price_per_cycle: 32.00, monthly_amount: 32.00, started_on: "2025-09-01", ended_on: "2026-04-30"}
+
+  - id: HO-023
+    title: Cancelled order with a declined card and no capture
+    expected: valid
+    description: The only payment attempt failed and the customer abandoned the order, which was cancelled.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3023, customer_id: C1004, order_status: cancelled, sales_channel: web, currency: USD, subtotal_amount: 28.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.02, total_amount: 35.97, ordered_at: "2026-06-17 21:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3023-1, order_id: SF3023, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3023, order_id: SF3023, customer_id: C1004, payment_method: card, payment_status: failed, amount: 35.97, currency: USD, processed_at: "2026-06-17 21:01:00"}
+
+  - id: HO-024
+    title: Order subtotal disagrees with its lines
+    expected: defective
+    defect_category: reconciliation
+    description: Lines sum to 34.50 but the header subtotal (and the charge) is based on 32.00.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3024, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 32.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.30, total_amount: 40.25, ordered_at: "2026-06-19 15:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3024-1, order_id: SF3024, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+        - {order_item_id: SF3024-2, order_id: SF3024, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3024, order_id: SF3024, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 40.25, currency: USD, processed_at: "2026-06-19 15:01:00"}
+
+  - id: HO-025
+    title: Payment settling two days after checkout
+    expected: valid
+    description: PayPal eCheck funds cleared two days after the order was placed.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3025, customer_id: C1002, order_status: delivered, sales_channel: app, currency: CAD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.80, total_amount: 24.75, ordered_at: "2026-06-20 08:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3025-1, order_id: SF3025, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3025, order_id: SF3025, customer_id: C1002, payment_method: paypal, payment_status: succeeded, amount: 24.75, currency: CAD, processed_at: "2026-06-22 09:30:00"}
+
+  - id: HO-026
+    title: Payment captured without an order reference
+    expected: defective
+    defect_category: missing_identifier
+    description: A succeeded capture has no order_id, so the cash cannot be matched to revenue.
+    records:
+      stg_payrail__payments:
+        - {payment_id: PAY3026, order_id: null, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 18.50, currency: CAD, processed_at: "2026-06-21 11:00:00"}
+
+  - id: HO-027
+    title: Paused subscription with no end date
+    expected: valid
+    description: The customer paused deliveries; a pause has no end date until it is resumed or cancelled.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3027, customer_id: C1002, plan_code: CLASSIC_MONTHLY, subscription_status: paused, billing_interval: monthly, price_per_cycle: 18.00, monthly_amount: 18.00, started_on: "2025-11-10", ended_on: null}
+
+  - id: HO-028
+    title: Subscription ended before it started
+    expected: defective
+    defect_category: chronology
+    description: A reactivated subscription kept its previous term's end date, which precedes the new start date.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3028, customer_id: C1003, plan_code: ESPRESSO_CLUB, subscription_status: cancelled, billing_interval: monthly, price_per_cycle: 26.00, monthly_amount: 26.00, started_on: "2026-03-10", ended_on: "2026-02-01"}
+
+  - id: HO-029
+    title: Customer who cancelled and later re-subscribed
+    expected: valid
+    description: An old cancelled subscription and a new active one for the same customer.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3029A, customer_id: C1004, plan_code: CLASSIC_MONTHLY, subscription_status: cancelled, billing_interval: monthly, price_per_cycle: 18.00, monthly_amount: 18.00, started_on: "2025-02-01", ended_on: "2025-09-30"}
+        - {subscription_id: SUB3029B, customer_id: C1004, plan_code: DOUBLE_MONTHLY, subscription_status: active, billing_interval: monthly, price_per_cycle: 32.00, monthly_amount: 32.00, started_on: "2026-04-01", ended_on: null}
+
+  - id: HO-030
+    title: Payment settled in a different currency than the order
+    expected: defective
+    defect_category: financial_consistency
+    description: A CAD order was captured in USD for the same face amount.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3030, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.80, total_amount: 24.75, ordered_at: "2026-06-22 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3030-1, order_id: SF3030, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3030, order_id: SF3030, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 24.75, currency: USD, processed_at: "2026-06-22 12:01:00"}
+
+  - id: HO-031
+    title: Order placed one minute before the data cutoff
+    expected: valid
+    description: A late-night order with an authorisation still pending at snapshot time.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3031, customer_id: C1005, order_status: placed, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-30 23:58:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3031-1, order_id: SF3031, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3031, order_id: SF3031, customer_id: C1005, payment_method: card, payment_status: pending, amount: 23.10, currency: USD, processed_at: "2026-06-30 23:59:00"}
+
+  - id: HO-032
+    title: Payment status 'complete' from a legacy integration
+    expected: defective
+    defect_category: invalid_category
+    description: A capture replayed from the legacy gateway carries status 'complete' instead of 'succeeded'.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3032, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-23 09:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3032-1, order_id: SF3032, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3032, order_id: SF3032, customer_id: C1001, payment_method: card, payment_status: complete, amount: 23.10, currency: USD, processed_at: "2026-06-23 09:01:00"}
+
+  - id: HO-033
+    title: Multi-line order across three categories
+    expected: valid
+    description: Beans, espresso and a dripper; above the free-shipping threshold.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3033, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 62.50, discount_amount: 0, shipping_amount: 0, tax_amount: 4.50, total_amount: 67.00, ordered_at: "2026-06-24 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3033-1, order_id: SF3033, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+        - {order_item_id: SF3033-2, order_id: SF3033, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+        - {order_item_id: SF3033-3, order_id: SF3033, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3033, order_id: SF3033, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 67.00, currency: USD, processed_at: "2026-06-24 10:01:00"}
+
+  - id: HO-034
+    title: Order line with a negative quantity
+    expected: defective
+    defect_category: invalid_numeric
+    description: A returns adjustment was written as an order line with quantity -1; the header was repriced to match.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3034, customer_id: C1004, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 13.50, discount_amount: 0, shipping_amount: 5.95, tax_amount: 0.97, total_amount: 20.42, ordered_at: "2026-06-24 15:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3034-1, order_id: SF3034, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+        - {order_item_id: SF3034-2, order_id: SF3034, product_id: P02, quantity: -1, unit_price: 18.50, line_amount: -18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3034, order_id: SF3034, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 20.42, currency: USD, processed_at: "2026-06-24 15:01:00"}
+
+  - id: HO-035
+    title: Single partial refund for a damaged bag
+    expected: valid
+    description: Half the product value refunded after the customer reported a torn bag.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3035, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.93, total_amount: 27.38, ordered_at: "2026-06-01 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3035-1, order_id: SF3035, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3035, order_id: SF3035, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 27.38, currency: CAD, processed_at: "2026-06-01 10:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3035, payment_id: PAY3035, refund_amount: 9.25, refund_reason: damaged_in_transit, refunded_at: "2026-06-08 14:00:00"}
+
+  - id: HO-036
+    title: Capture attributed to a different customer than the order
+    expected: defective
+    defect_category: business_rule
+    description: >
+      The order belongs to C1001 but the PayRail capture is recorded against C1002 (after a PayRail account merge).
+      Both customers exist and the order exists, so each reference is individually valid.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3036, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 28.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.02, total_amount: 35.97, ordered_at: "2026-06-25 18:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3036-1, order_id: SF3036, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3036, order_id: SF3036, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 35.97, currency: USD, processed_at: "2026-06-25 18:01:00"}
+
+  - id: HO-037
+    title: New customer with no orders yet
+    expected: valid
+    description: Signed up the day before the snapshot and has not purchased yet.
+    records:
+      stg_shopfront__customers:
+        - {customer_id: C1012, email: jules.martin@example.com, first_name: Jules, last_name: Martin, country_code: US, acquisition_channel: paid_social, customer_status: active, signed_up_at: "2026-06-29 20:00:00"}
+
+  - id: HO-038
+    title: Order total ignores the tax line
+    expected: defective
+    defect_category: reconciliation
+    description: Tax of 1.15 is recorded but the total (and the charge) were computed without it.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3038, customer_id: C1005, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 21.95, ordered_at: "2026-06-25 09:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3038-1, order_id: SF3038, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3038, order_id: SF3038, customer_id: C1005, payment_method: card, payment_status: succeeded, amount: 21.95, currency: USD, processed_at: "2026-06-25 09:01:00"}
+
+  - id: HO-039
+    title: Payment captured in the same second as checkout
+    expected: valid
+    description: Apple Pay captures synchronously, so the payment and order timestamps are identical.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3039, customer_id: C1003, order_status: delivered, sales_channel: app, currency: GBP, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 4.95, tax_amount: 0, total_amount: 23.45, ordered_at: "2026-06-26 07:30:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3039-1, order_id: SF3039, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3039, order_id: SF3039, customer_id: C1003, payment_method: apple_pay, payment_status: succeeded, amount: 23.45, currency: GBP, processed_at: "2026-06-26 07:30:00"}
+
+  - id: HO-040
+    title: CSAT rating of 7 on a 1-5 scale
+    expected: defective
+    defect_category: invalid_numeric
+    description: A survey tool migration mapped a 10-point score into the 5-point CSAT field.
+    records:
+      stg_deskline__tickets:
+        - {ticket_id: TCK3040, customer_id: C1001, order_id: null, channel: chat, priority: normal, ticket_status: solved, opened_at: "2026-06-20 09:00:00", solved_at: "2026-06-20 11:00:00", csat_score: 7}
+
+  - id: HO-041
+    title: Historical order priced before the 2025 price change
+    expected: valid
+    description: The order line carries the 2024 unit price (15.00), which differs from today's list price (16.00).
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3041, customer_id: C1003, order_status: delivered, sales_channel: web, currency: GBP, subtotal_amount: 15.00, discount_amount: 0, shipping_amount: 4.95, tax_amount: 0, total_amount: 19.95, ordered_at: "2024-11-15 13:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3041-1, order_id: SF3041, product_id: P01, quantity: 1, unit_price: 15.00, line_amount: 15.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3041, order_id: SF3041, customer_id: C1003, payment_method: card, payment_status: succeeded, amount: 19.95, currency: GBP, processed_at: "2024-11-15 13:01:00"}
+
+  - id: HO-042
+    title: Refund issued against an unknown payment
+    expected: defective
+    defect_category: broken_relationship
+    description: A refund references PAY9999, which PayRail never exported.
+    records:
+      stg_payrail__refunds:
+        - {refund_id: RF3042, payment_id: PAY9999, refund_amount: 12.00, refund_reason: wrong_item, refunded_at: "2026-06-26 16:00:00"}
+
+  - id: HO-043
+    title: CAD order with campaign discount and Canadian tax
+    expected: valid
+    description: 10% promo on two bags, Canadian shipping and 5% tax on the discounted subtotal.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3043, customer_id: C1002, campaign_id: CMP01, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 32.00, discount_amount: 3.20, shipping_amount: 7.95, tax_amount: 1.44, total_amount: 38.19, ordered_at: "2026-06-27 11:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3043-1, order_id: SF3043, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3043, order_id: SF3043, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 38.19, currency: CAD, processed_at: "2026-06-27 11:01:00"}
+
+  - id: HO-044
+    title: Ticket solved before it was opened
+    expected: defective
+    defect_category: chronology
+    description: solved_at was exported in local time while opened_at is UTC, so resolution appears six hours early.
+    records:
+      stg_deskline__tickets:
+        - {ticket_id: TCK3044, customer_id: C1002, order_id: null, channel: email, priority: high, ticket_status: solved, opened_at: "2026-06-27 15:00:00", solved_at: "2026-06-27 09:00:00", csat_score: 4}
+
+  - id: HO-045
+    title: Escalated support ticket still open
+    expected: valid
+    description: An urgent ticket about a shipped order, opened on the last day and not yet solved.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3045, customer_id: C1001, order_status: shipped, sales_channel: web, currency: USD, subtotal_amount: 28.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.02, total_amount: 35.97, ordered_at: "2026-06-28 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3045-1, order_id: SF3045, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3045, order_id: SF3045, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 35.97, currency: USD, processed_at: "2026-06-28 10:01:00"}
+      stg_deskline__tickets:
+        - {ticket_id: TCK3045, customer_id: C1001, order_id: SF3045, channel: phone, priority: urgent, ticket_status: open, opened_at: "2026-06-30 08:00:00", solved_at: null, csat_score: null}
+
+  - id: HO-046
+    title: Subscription in a 'trialing' state Rebill does not define
+    expected: defective
+    defect_category: invalid_category
+    description: A trial experiment wrote a lifecycle status outside the Rebill contract.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3046, customer_id: C1005, plan_code: DISCOVERY_BIWEEKLY, subscription_status: trialing, billing_interval: biweekly, price_per_cycle: 22.00, monthly_amount: 47.67, started_on: "2026-06-15", ended_on: null}
+
+  - id: HO-047
+    title: Biweekly discovery subscription
+    expected: valid
+    description: Biweekly plan whose monthly amount is normalised to 26/12 cycles.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3047, customer_id: C1003, plan_code: DISCOVERY_BIWEEKLY, subscription_status: active, billing_interval: biweekly, price_per_cycle: 22.00, monthly_amount: 47.67, started_on: "2026-02-01", ended_on: null}
+
+  - id: HO-048
+    title: Captured amount differs from the order total
+    expected: defective
+    defect_category: reconciliation
+    description: The capture used the pre-shipping amount; it is 2.70 short of the order total.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3048, customer_id: C1005, campaign_id: CMP01, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 37.00, discount_amount: 5.55, shipping_amount: 5.95, tax_amount: 2.26, total_amount: 39.66, ordered_at: "2026-06-12 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3048-1, order_id: SF3048, product_id: P02, quantity: 2, unit_price: 18.50, line_amount: 37.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3048, order_id: SF3048, customer_id: C1005, payment_method: card, payment_status: succeeded, amount: 36.96, currency: USD, processed_at: "2026-06-12 12:01:00"}
+
+  - id: HO-049
+    title: Full refund of a returned order
+    expected: valid
+    description: The dripper was returned and the full captured amount refunded.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3049, customer_id: C1004, order_status: returned, sales_channel: web, currency: USD, subtotal_amount: 28.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.02, total_amount: 35.97, ordered_at: "2026-06-01 09:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3049-1, order_id: SF3049, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3049, order_id: SF3049, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 35.97, currency: USD, processed_at: "2026-06-01 09:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3049, payment_id: PAY3049, refund_amount: 35.97, refund_reason: order_returned, refunded_at: "2026-06-15 11:00:00"}
+
+  - id: HO-050
+    title: Two partial refunds that together exceed the payment
+    expected: defective
+    defect_category: financial_consistency
+    description: >
+      A goodwill refund (26.00) and an automated returns-flow refund (22.00) were both issued against a 44.00 capture.
+      Each refund is smaller than the payment; together they return 4.00 more than was collected.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3050, customer_id: C1003, order_status: delivered, sales_channel: web, currency: GBP, subtotal_amount: 44.00, discount_amount: 0, shipping_amount: 0, tax_amount: 0, total_amount: 44.00, ordered_at: "2026-06-03 17:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3050-1, order_id: SF3050, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF3050-2, order_id: SF3050, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3050, order_id: SF3050, customer_id: C1003, payment_method: card, payment_status: succeeded, amount: 44.00, currency: GBP, processed_at: "2026-06-03 17:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3050A, payment_id: PAY3050, refund_amount: 26.00, refund_reason: damaged_in_transit, refunded_at: "2026-06-09 10:00:00"}
+        - {refund_id: RF3050B, payment_id: PAY3050, refund_amount: 22.00, refund_reason: quality_complaint, refunded_at: "2026-06-12 15:00:00"}
+
+  - id: HO-051
+    title: Shipped order awaiting delivery
+    expected: valid
+    description: Paid and handed to the carrier two days before the snapshot.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3051, customer_id: C1005, order_status: shipped, sales_channel: app, currency: USD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.33, total_amount: 25.78, ordered_at: "2026-06-28 19:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3051-1, order_id: SF3051, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3051, order_id: SF3051, customer_id: C1005, payment_method: apple_pay, payment_status: succeeded, amount: 25.78, currency: USD, processed_at: "2026-06-28 19:01:00"}
+
+  - id: HO-052
+    title: Subscription for a customer that does not exist
+    expected: defective
+    defect_category: broken_relationship
+    description: Rebill holds a subscription for customer C8888, who is not in Shopfront.
+    records:
+      stg_rebill__subscriptions:
+        - {subscription_id: SUB3052, customer_id: C8888, plan_code: CLASSIC_MONTHLY, subscription_status: active, billing_interval: monthly, price_per_cycle: 18.00, monthly_amount: 18.00, started_on: "2026-05-01", ended_on: null}
+
+  - id: HO-053
+    title: Refund issued the same day as the payment
+    expected: valid
+    description: Wrong grind shipped; a partial refund was issued that afternoon.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3053, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-29 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3053-1, order_id: SF3053, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3053, order_id: SF3053, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-29 10:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF3053, payment_id: PAY3053, refund_amount: 5.00, refund_reason: wrong_item, refunded_at: "2026-06-29 16:30:00"}
+
+  - id: HO-054
+    title: Customer signup before the store launched
+    expected: defective
+    defect_category: invalid_date
+    description: A CRM import set signed_up_at to 2019, four years before Copperleaf opened.
+    records:
+      stg_shopfront__customers:
+        - {customer_id: C1010, email: sam.lee@example.com, first_name: Sam, last_name: Lee, country_code: US, acquisition_channel: referral, customer_status: active, signed_up_at: "2019-02-14 12:00:00"}
+
+  - id: HO-055
+    title: Promo order with free shipping
+    expected: valid
+    description: 20% campaign discount on two drippers; the discounted subtotal still qualifies for free shipping.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3055, customer_id: C1004, campaign_id: CMP01, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 56.00, discount_amount: 11.20, shipping_amount: 0, tax_amount: 3.23, total_amount: 48.03, ordered_at: "2026-06-21 14:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3055-1, order_id: SF3055, product_id: P03, quantity: 2, unit_price: 28.00, line_amount: 56.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3055, order_id: SF3055, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 48.03, currency: USD, processed_at: "2026-06-21 14:01:00"}
+
+  - id: HO-056
+    title: Duplicate capture from a webhook retry
+    expected: defective
+    defect_category: duplicate_identifier
+    description: PayRail retried the capture webhook and the same payment landed twice.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3056, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 18.50, discount_amount: 0, shipping_amount: 7.95, tax_amount: 0.93, total_amount: 27.38, ordered_at: "2026-06-18 09:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3056-1, order_id: SF3056, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3056, order_id: SF3056, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 27.38, currency: CAD, processed_at: "2026-06-18 09:01:00"}
+        - {payment_id: PAY3056, order_id: SF3056, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 27.38, currency: CAD, processed_at: "2026-06-18 09:01:00"}
+
+  - id: HO-057
+    title: General support enquiry with no order attached
+    expected: valid
+    description: A brewing question answered the same day; tickets do not require an order.
+    records:
+      stg_deskline__tickets:
+        - {ticket_id: TCK3057, customer_id: C1003, order_id: null, channel: email, priority: normal, ticket_status: solved, opened_at: "2026-06-10 09:00:00", solved_at: "2026-06-10 15:00:00", csat_score: 5}
+
+  - id: HO-058
+    title: Discount larger than the order subtotal
+    expected: defective
+    defect_category: business_rule
+    description: A stacked promo applied a $20 discount to a $16 order; only shipping was charged.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3058, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 20.00, shipping_amount: 5.95, tax_amount: 0, total_amount: 1.95, ordered_at: "2026-06-19 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3058-1, order_id: SF3058, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY3058, order_id: SF3058, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 1.95, currency: USD, processed_at: "2026-06-19 10:01:00"}
+
+  - id: HO-059
+    title: Fully discounted replacement order with a $0.00 authorisation
+    expected: valid
+    description: >
+      Support replaced a damaged bag with a 100%-discounted order (no shipping or tax). PayRail records a $0.00
+      succeeded authorisation for zero-total orders so the order lifecycle completes.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3059, customer_id: C1001, order_status: delivered, sales_channel: support_replacement, currency: USD, subtotal_amount: 18.50, discount_amount: 18.50, shipping_amount: 0, tax_amount: 0, total_amount: 0.00, ordered_at: "2026-06-14 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3059-1, order_id: SF3059, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3059, order_id: SF3059, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 0.00, currency: USD, processed_at: "2026-06-14 12:00:20"}
+      stg_deskline__tickets:
+        - {ticket_id: TCK3059, customer_id: C1001, order_id: null, channel: email, priority: normal, ticket_status: solved, opened_at: "2026-06-13 09:00:00", solved_at: "2026-06-14 11:55:00", csat_score: 4}
+
+  - id: HO-060
+    title: Order above the free-shipping threshold
+    expected: valid
+    description: Dripper plus espresso; free shipping and US tax.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF3060, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 46.50, discount_amount: 0, shipping_amount: 0, tax_amount: 3.35, total_amount: 49.85, ordered_at: "2026-06-26 13:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF3060-1, order_id: SF3060, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF3060-2, order_id: SF3060, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY3060, order_id: SF3060, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 49.85, currency: USD, processed_at: "2026-06-26 13:01:00"}

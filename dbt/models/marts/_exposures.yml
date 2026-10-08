@@ -1,0 +1,87 @@
+version: 2
+
+# Downstream consumers of the warehouse. DataTrust treats these as the business outputs a data
+# defect can ultimately reach (executive, financial and customer-facing surfaces).
+
+exposures:
+  - name: executive_kpi_dashboard
+    label: Executive KPI Dashboard
+    type: dashboard
+    maturity: high
+    url: https://bi.copperleaf.internal/dashboards/executive-kpis
+    description: Monthly scorecard reviewed by the leadership team and shared with the board.
+    depends_on:
+      - ref('rpt_executive_kpis')
+    owner: {name: Finance Analytics, email: finance-analytics@copperleaf.example}
+    config:
+      meta: {owner: finance_analytics, criticality: critical, audience: executive, financial_reporting: true}
+
+  - name: finance_month_end_close
+    label: Month-End Close Pack
+    type: analysis
+    maturity: high
+    url: https://bi.copperleaf.internal/finance/month-end-close
+    description: Revenue-to-cash reconciliation used by the controller to close the books each month.
+    depends_on:
+      - ref('fin_monthly_revenue_close')
+      - ref('fct_payments')
+    owner: {name: Finance Analytics, email: finance-analytics@copperleaf.example}
+    config:
+      meta: {owner: finance_analytics, criticality: critical, audience: finance, financial_reporting: true}
+
+  - name: revenue_forecast_model
+    label: Revenue Forecast Notebook
+    type: ml
+    maturity: medium
+    description: Weekly revenue forecast feeding inventory and roasting plans.
+    depends_on:
+      - ref('fct_daily_revenue')
+    owner: {name: Finance Analytics, email: finance-analytics@copperleaf.example}
+    config:
+      meta: {owner: finance_analytics, criticality: high, audience: finance, financial_reporting: true}
+
+  - name: loyalty_tier_sync
+    label: Loyalty Tier Sync
+    type: application
+    maturity: high
+    description: Nightly reverse-ETL job that publishes CLV tiers to the customer-facing loyalty programme.
+    depends_on:
+      - ref('customer_lifetime_value')
+    owner: {name: Customer Data, email: customer-data@copperleaf.example}
+    config:
+      meta: {owner: customer_data, criticality: high, audience: customer_facing, customer_facing: true}
+
+  - name: customer_health_console
+    label: Customer Health Console
+    type: dashboard
+    maturity: high
+    url: https://bi.copperleaf.internal/dashboards/customer-health
+    description: Daily outreach list used by the Customer Experience team to contact at-risk customers.
+    depends_on:
+      - ref('customer_health_scores')
+    owner: {name: Customer Experience, email: cx-ops@copperleaf.example}
+    config:
+      meta: {owner: customer_experience, criticality: high, audience: internal}
+
+  - name: growth_attribution_dashboard
+    label: Growth Attribution Dashboard
+    type: dashboard
+    maturity: medium
+    url: https://bi.copperleaf.internal/dashboards/growth-attribution
+    description: Campaign ROAS and CAC used for weekly budget reallocation.
+    depends_on:
+      - ref('campaign_performance')
+    owner: {name: Growth Analytics, email: growth-analytics@copperleaf.example}
+    config:
+      meta: {owner: growth_analytics, criticality: medium, audience: internal}
+
+  - name: subscription_retention_dashboard
+    label: Subscription Retention Dashboard
+    type: dashboard
+    maturity: medium
+    description: Plan-level retention and MRR trends for the subscriptions programme.
+    depends_on:
+      - ref('fct_subscriptions')
+    owner: {name: Commerce, email: commerce-data@copperleaf.example}
+    config:
+      meta: {owner: commerce, criticality: medium, audience: internal}

@@ -1,0 +1,24 @@
+# Scripted triage applied by `datatrust pipeline` after the quality backfill, so the demo shows the
+# issue workflow (open -> investigating / accepted) with an audit trail. Actions target rules, not
+# issue keys, so they survive regeneration. Every action is recorded in issue_events under its actor.
+actions:
+  - rule: payments_payment_id_unique
+    status: investigating
+    actor: priya.raman (Payments)
+    note: >
+      Duplicates line up with PayRail webhook retries over the last two weeks. Checking whether the landing
+      job's idempotency key was dropped in a recent deploy.
+  - rule: refunds_cumulative_not_exceeding_payment
+    status: investigating
+    actor: marcus.oyelaran (Finance Analytics)
+    note: Pulling the affected captures for the month-end close; goodwill refunds may need to be clawed back.
+  - rule: tickets_channel_accepted_values
+    status: accepted
+    actor: dana.whitfield (Customer Experience)
+    note: >
+      Known: the new chat widget reports 'chat_widget_v2'. Channel mapping update is scheduled for the next
+      Deskline release; reporting impact is limited to the channel-mix chart.
+comments:
+  - rule: orders_customer_exists
+    actor: lena.kowalski (Commerce)
+    note: Marketplace import job writes legacy customer ids; ticket opened with the integrations team.

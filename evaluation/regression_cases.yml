@@ -1,0 +1,174 @@
+# Regression suite for the three baseline errors on the held-out set (HO-036, HO-050, HO-059).
+#
+# Each baseline error is covered by variants that probe the edges of the fix, so the improved rules are
+# shown to fix the error class rather than the single held-out example:
+#   HO-050 (cumulative refunds missed)   -> RG-001, RG-002, RG-007, RG-010
+#   HO-036 (payment customer mismatch)   -> RG-003, RG-009
+#   HO-059 ($0 replacement false alarm)  -> RG-004, RG-005, RG-006, RG-008
+# The baseline detector is expected to fail parts of this suite; the improved detector must pass all of it.
+
+suite: regression
+description: Variants of the baseline holdout errors that the improved detector must classify correctly.
+reference_ts: "2026-06-30 23:59:59"
+
+context:
+  stg_shopfront__customers:
+    - {customer_id: C1001, email: ava.kim@example.com, first_name: Ava, last_name: Kim, country_code: US, acquisition_channel: paid_search, customer_status: active, signed_up_at: "2025-01-10 09:00:00"}
+    - {customer_id: C1002, email: noah.tremblay@example.com, first_name: Noah, last_name: Tremblay, country_code: CA, acquisition_channel: organic_search, customer_status: active, signed_up_at: "2025-03-05 14:20:00"}
+    - {customer_id: C1004, email: leo.garcia@example.com, first_name: Leo, last_name: Garcia, country_code: US, acquisition_channel: email, customer_status: active, signed_up_at: "2025-08-20 18:45:00"}
+  stg_shopfront__products:
+    - {product_id: P01, sku: CL-HB-12, product_name: House Blend Whole Bean 12oz, category: whole_bean, list_price: 16.00, is_active: true, launched_on: "2023-06-01"}
+    - {product_id: P02, sku: CL-ER-12, product_name: Ember Espresso Roast 12oz, category: espresso, list_price: 18.50, is_active: true, launched_on: "2023-06-01"}
+    - {product_id: P03, sku: CL-EQ-V60, product_name: Ceramic Pour-Over Dripper, category: equipment, list_price: 28.00, is_active: true, launched_on: "2023-06-01"}
+
+cases:
+  - id: RG-001
+    title: Three partial refunds that together exceed the payment
+    expected: defective
+    defect_category: financial_consistency
+    description: Three 15.00 refunds against a 40.25 capture; each is individually smaller than the payment.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4001, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 32.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 2.30, total_amount: 40.25, ordered_at: "2026-06-06 11:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4001-1, order_id: SF4001, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4001, order_id: SF4001, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 40.25, currency: USD, processed_at: "2026-06-06 11:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF4001A, payment_id: PAY4001, refund_amount: 15.00, refund_reason: damaged_in_transit, refunded_at: "2026-06-09 10:00:00"}
+        - {refund_id: RF4001B, payment_id: PAY4001, refund_amount: 15.00, refund_reason: quality_complaint, refunded_at: "2026-06-10 10:00:00"}
+        - {refund_id: RF4001C, payment_id: PAY4001, refund_amount: 15.00, refund_reason: late_delivery, refunded_at: "2026-06-11 10:00:00"}
+
+  - id: RG-002
+    title: Refunds exceed one leg of a split tender
+    expected: defective
+    defect_category: financial_consistency
+    description: >
+      27.00 refunded to a 25.00 gift-card leg. The order-level refund total is below the order total, so only a
+      per-payment comparison catches it.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4002, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 60.00, discount_amount: 0, shipping_amount: 0, tax_amount: 4.32, total_amount: 64.32, ordered_at: "2026-06-05 19:45:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4002-1, order_id: SF4002, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF4002-2, order_id: SF4002, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4002A, order_id: SF4002, customer_id: C1001, payment_method: gift_card, payment_status: succeeded, amount: 25.00, currency: USD, processed_at: "2026-06-05 19:46:00"}
+        - {payment_id: PAY4002B, order_id: SF4002, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 39.32, currency: USD, processed_at: "2026-06-05 19:46:05"}
+      stg_payrail__refunds:
+        - {refund_id: RF4002A, payment_id: PAY4002A, refund_amount: 15.00, refund_reason: damaged_in_transit, refunded_at: "2026-06-09 10:00:00"}
+        - {refund_id: RF4002B, payment_id: PAY4002A, refund_amount: 12.00, refund_reason: quality_complaint, refunded_at: "2026-06-12 10:00:00"}
+
+  - id: RG-003
+    title: Customer mismatch on the second leg of a split tender
+    expected: defective
+    defect_category: business_rule
+    description: The gift-card leg belongs to the order's customer; the card leg was recorded against another customer.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4003, customer_id: C1001, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 60.00, discount_amount: 0, shipping_amount: 0, tax_amount: 4.32, total_amount: 64.32, ordered_at: "2026-06-07 19:45:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4003-1, order_id: SF4003, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF4003-2, order_id: SF4003, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4003A, order_id: SF4003, customer_id: C1001, payment_method: gift_card, payment_status: succeeded, amount: 25.00, currency: USD, processed_at: "2026-06-07 19:46:00"}
+        - {payment_id: PAY4003B, order_id: SF4003, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 39.32, currency: USD, processed_at: "2026-06-07 19:46:05"}
+
+  - id: RG-004
+    title: Spurious $0.00 capture on an order that costs money
+    expected: defective
+    defect_category: invalid_numeric
+    description: >
+      The full amount was captured, but a $0.00 succeeded capture was also recorded. The $0 relaxation applies only
+      to zero-total orders, so this must still be flagged.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4004, customer_id: C1004, order_status: delivered, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-04 08:30:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4004-1, order_id: SF4004, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4004A, order_id: SF4004, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-04 08:31:00"}
+        - {payment_id: PAY4004B, order_id: SF4004, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 0.00, currency: USD, processed_at: "2026-06-04 08:31:02"}
+
+  - id: RG-005
+    title: $0.00 capture for an order that does not exist
+    expected: defective
+    defect_category: invalid_numeric
+    description: A $0 capture can only be justified by a zero-total order; with no order it cannot be justified.
+    records:
+      stg_payrail__payments:
+        - {payment_id: PAY4005, order_id: SF9998, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 0.00, currency: USD, processed_at: "2026-06-15 12:00:00"}
+
+  - id: RG-006
+    title: Negative capture on a fully discounted order
+    expected: defective
+    defect_category: invalid_numeric
+    description: The zero-total exemption must not extend to negative amounts.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4006, customer_id: C1001, order_status: delivered, sales_channel: support_replacement, currency: USD, subtotal_amount: 16.00, discount_amount: 16.00, shipping_amount: 0, tax_amount: 0, total_amount: 0.00, ordered_at: "2026-06-16 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4006-1, order_id: SF4006, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4006, order_id: SF4006, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: -5.00, currency: USD, processed_at: "2026-06-16 12:00:20"}
+
+  - id: RG-007
+    title: Three partial refunds that exactly equal the payment
+    expected: valid
+    description: Boundary case for the cumulative check; refunds sum to the capture to the cent.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4007, customer_id: C1004, order_status: returned, sales_channel: web, currency: USD, subtotal_amount: 16.00, discount_amount: 0, shipping_amount: 5.95, tax_amount: 1.15, total_amount: 23.10, ordered_at: "2026-06-02 10:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4007-1, order_id: SF4007, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4007, order_id: SF4007, customer_id: C1004, payment_method: card, payment_status: succeeded, amount: 23.10, currency: USD, processed_at: "2026-06-02 10:01:00"}
+      stg_payrail__refunds:
+        - {refund_id: RF4007A, payment_id: PAY4007, refund_amount: 10.00, refund_reason: damaged_in_transit, refunded_at: "2026-06-05 10:00:00"}
+        - {refund_id: RF4007B, payment_id: PAY4007, refund_amount: 8.00, refund_reason: quality_complaint, refunded_at: "2026-06-08 10:00:00"}
+        - {refund_id: RF4007C, payment_id: PAY4007, refund_amount: 5.10, refund_reason: order_returned, refunded_at: "2026-06-12 10:00:00"}
+
+  - id: RG-008
+    title: $0.00 authorisation on a fully discounted two-line order
+    expected: valid
+    description: A goodwill replacement of two items; zero total, zero authorisation.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4008, customer_id: C1002, order_status: delivered, sales_channel: support_replacement, currency: CAD, subtotal_amount: 34.50, discount_amount: 34.50, shipping_amount: 0, tax_amount: 0, total_amount: 0.00, ordered_at: "2026-06-18 12:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4008-1, order_id: SF4008, product_id: P01, quantity: 1, unit_price: 16.00, line_amount: 16.00}
+        - {order_item_id: SF4008-2, order_id: SF4008, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY4008, order_id: SF4008, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 0.00, currency: CAD, processed_at: "2026-06-18 12:00:15"}
+
+  - id: RG-009
+    title: Split tender where both legs belong to the order's customer
+    expected: valid
+    description: The customer-match rule must compare each payment to its order, not require a single payment.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4009, customer_id: C1002, order_status: delivered, sales_channel: web, currency: CAD, subtotal_amount: 46.50, discount_amount: 0, shipping_amount: 0, tax_amount: 2.33, total_amount: 48.83, ordered_at: "2026-06-20 15:00:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4009-1, order_id: SF4009, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF4009-2, order_id: SF4009, product_id: P02, quantity: 1, unit_price: 18.50, line_amount: 18.50}
+      stg_payrail__payments:
+        - {payment_id: PAY4009A, order_id: SF4009, customer_id: C1002, payment_method: gift_card, payment_status: succeeded, amount: 20.00, currency: CAD, processed_at: "2026-06-20 15:01:00"}
+        - {payment_id: PAY4009B, order_id: SF4009, customer_id: C1002, payment_method: card, payment_status: succeeded, amount: 28.83, currency: CAD, processed_at: "2026-06-20 15:01:04"}
+
+  - id: RG-010
+    title: Refunds spread across both legs of a split tender
+    expected: valid
+    description: Each leg is refunded up to (but not beyond) its own amount.
+    records:
+      stg_shopfront__orders:
+        - {order_id: SF4010, customer_id: C1001, order_status: returned, sales_channel: web, currency: USD, subtotal_amount: 60.00, discount_amount: 0, shipping_amount: 0, tax_amount: 4.32, total_amount: 64.32, ordered_at: "2026-06-03 19:45:00"}
+      stg_shopfront__order_items:
+        - {order_item_id: SF4010-1, order_id: SF4010, product_id: P03, quantity: 1, unit_price: 28.00, line_amount: 28.00}
+        - {order_item_id: SF4010-2, order_id: SF4010, product_id: P01, quantity: 2, unit_price: 16.00, line_amount: 32.00}
+      stg_payrail__payments:
+        - {payment_id: PAY4010A, order_id: SF4010, customer_id: C1001, payment_method: gift_card, payment_status: succeeded, amount: 25.00, currency: USD, processed_at: "2026-06-03 19:46:00"}
+        - {payment_id: PAY4010B, order_id: SF4010, customer_id: C1001, payment_method: card, payment_status: succeeded, amount: 39.32, currency: USD, processed_at: "2026-06-03 19:46:05"}
+      stg_payrail__refunds:
+        - {refund_id: RF4010A, payment_id: PAY4010A, refund_amount: 25.00, refund_reason: order_returned, refunded_at: "2026-06-10 10:00:00"}
+        - {refund_id: RF4010B, payment_id: PAY4010B, refund_amount: 20.00, refund_reason: order_returned, refunded_at: "2026-06-10 10:00:05"}
+        - {refund_id: RF4010C, payment_id: PAY4010B, refund_amount: 19.32, refund_reason: order_returned, refunded_at: "2026-06-11 09:00:00"}

@@ -1,0 +1,49 @@
+# Data ownership. Team keys are referenced by dbt meta.owner, source systems and glossary terms.
+teams:
+  - key: commerce
+    name: Commerce
+    description: Owns storefront, order and subscription data products and the order-to-revenue models.
+    lead: Dana Whitfield
+    email: commerce-data@copperleaf.example
+    slack: "#data-commerce"
+    on_call: commerce-data-oncall
+  - key: payments
+    name: Payments
+    description: Owns PayRail integration, payment and refund data, and cash reconciliation inputs.
+    lead: Marcus Oyelaran
+    email: payments-eng@copperleaf.example
+    slack: "#payments-data"
+    on_call: payments-oncall
+  - key: finance_analytics
+    name: Finance Analytics
+    description: Owns revenue reporting, month-end close, forecasting and the executive scorecard.
+    lead: Priya Raman
+    email: finance-analytics@copperleaf.example
+    slack: "#finance-analytics"
+    on_call: finance-analytics-oncall
+  - key: growth_analytics
+    name: Growth Analytics
+    description: Owns campaign data, attribution and acquisition efficiency metrics.
+    lead: Tomás Echeverría
+    email: growth-analytics@copperleaf.example
+    slack: "#growth-analytics"
+  - key: customer_experience
+    name: Customer Experience
+    description: Owns support ticket data and the customer health outreach workflow.
+    lead: Hannah Osei
+    email: cx-ops@copperleaf.example
+    slack: "#cx-data"
+  - key: customer_data
+    name: Customer Data
+    description: Owns the customer master, conformed customer dimension, CLV and health scoring.
+    lead: Wei Zhang
+    email: customer-data@copperleaf.example
+    slack: "#customer-data"
+    on_call: customer-data-oncall
+  - key: platform_engineering
+    name: Platform Engineering
+    description: Owns ingestion pipelines, raw landing tables and warehouse infrastructure.
+    lead: Lena Fischer
+    email: data-platform@copperleaf.example
+    slack: "#data-platform"
+    on_call: data-platform-oncall

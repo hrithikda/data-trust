@@ -1,0 +1,64 @@
+# Issue priority model. Points are additive and capped per factor; maxima sum to 100.
+# Every factor is reported with its points and a plain-language reason, so a score can be audited.
+# Factors are grouped: the "defect" group describes the broken records themselves, the
+# "blast_radius" group describes what depends on them (also reported alone as the impact score).
+
+factors:
+  severity:
+    group: defect
+    max_points: 20
+    points_by_severity: {critical: 20, high: 14, medium: 8, low: 3}
+  affected_volume:
+    group: defect
+    max_points: 8
+    saturation_records: 10000      # log-scaled; 10k+ failing records earns the maximum
+  affected_rate:
+    group: defect
+    max_points: 7
+    saturation_rate: 0.05          # linear; 5%+ of scanned records earns the maximum
+  dataset_criticality:
+    group: defect
+    max_points: 10
+    points_by_criticality: {critical: 10, high: 7, medium: 4, low: 1}
+  field_criticality:
+    group: defect
+    max_points: 10
+    critical_field_points: 6       # any failing column is a critical data element
+    sensitive_category_points: 4   # ...and it is money, a join identifier or a customer identifier
+    sensitive_categories: [financial, identifier, customer_identifier]
+  downstream_dependencies:
+    group: blast_radius
+    max_points: 10
+    saturation_assets: 25          # linear up to 25 downstream assets
+  critical_downstream:
+    group: blast_radius
+    max_points: 10
+    points_per_asset: 0.5          # saturates at 20 high/critical downstream assets
+  financial_reporting:
+    group: blast_radius
+    max_points: 8
+  executive_or_customer_facing:
+    group: blast_radius
+    max_points: 9
+    executive_points: 9            # executive output within `executive_free_hops` transformations
+    executive_free_hops: 2
+    executive_hop_decay: 1         # minus 1 point per additional transformation...
+    executive_min_points: 5        # ...but never below 5
+    customer_facing_points: 7
+  multi_team:
+    group: blast_radius
+    max_points: 8
+    points_per_additional_team: 1.6
+
+bands:                              # lower bound (inclusive) -> band
+  P1: 80
+  P2: 65
+  P3: 45
+  P4: 0
+
+impact_levels:                      # blast-radius share (0-100) -> level
+  severe: 75
+  high: 50
+  moderate: 25
+  low: 1
+  none: 0

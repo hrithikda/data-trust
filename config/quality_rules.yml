@@ -1,0 +1,680 @@
+# DataTrust quality rules.
+#
+# Each rule is declarative: a rule *type* (implemented once in datatrust/quality/checks.py) plus
+# parameters. Rules target staging models, the earliest typed layer, so defects are caught before
+# they spread into marts.
+#
+#   rulesets   which detector versions include the rule. `baseline` is the first version that was
+#              evaluated on the held-out set; `improved` adds the fixes from failure analysis.
+#   where      optional SQL predicate limiting the rows in scope (records_scanned counts these).
+#   Aliases    p = the rule's asset, r = reference asset (joins), c = child asset (aggregates).
+#   Tokens     {reference_ts} = data cutoff timestamp; {ref:<asset>} = another asset's relation.
+
+rules:
+  # ------------------------------------------------------------------ missing identifiers
+  - key: orders_order_id_not_null
+    name: Order ID is present
+    category: missing_identifier
+    type: not_null
+    asset: stg_shopfront__orders
+    columns: [order_id]
+    severity: critical
+    business_impact: Orders without an id cannot be joined to lines or payments and silently drop out of revenue.
+    rulesets: [baseline, improved]
+
+  - key: orders_customer_id_not_null
+    name: Order has a customer
+    category: missing_identifier
+    type: not_null
+    asset: stg_shopfront__orders
+    columns: [customer_id]
+    severity: critical
+    business_impact: Revenue that cannot be attributed to a customer distorts CLV, cohorts and active-customer counts.
+    rulesets: [baseline, improved]
+
+  - key: order_items_order_id_not_null
+    name: Order line references an order
+    category: missing_identifier
+    type: not_null
+    asset: stg_shopfront__order_items
+    columns: [order_id]
+    severity: high
+    business_impact: Detached lines vanish from order subtotals and product sales.
+    rulesets: [baseline, improved]
+
+  - key: payments_payment_id_not_null
+    name: Payment ID is present
+    category: missing_identifier
+    type: not_null
+    asset: stg_payrail__payments
+    columns: [payment_id]
+    severity: critical
+    business_impact: Captures without an id cannot be reconciled or refunded.
+    rulesets: [baseline, improved]
+
+  - key: payments_order_id_not_null
+    name: Payment references an order
+    category: missing_identifier
+    type: not_null
+    asset: stg_payrail__payments
+    columns: [order_id]
+    severity: high
+    business_impact: Cash that cannot be matched to an order breaks the revenue-to-cash reconciliation.
+    rulesets: [baseline, improved]
+
+  - key: customers_customer_id_not_null
+    name: Customer ID is present
+    category: missing_identifier
+    type: not_null
+    asset: stg_shopfront__customers
+    columns: [customer_id]
+    severity: critical
+    business_impact: Customers without an id cannot be joined to orders, subscriptions or support history.
+    rulesets: [baseline, improved]
+
+  - key: customers_email_not_null
+    name: Customer has a contact email
+    category: missing_identifier
+    type: not_null
+    asset: stg_shopfront__customers
+    columns: [email]
+    severity: low
+    business_impact: Customers without email miss order confirmations and lifecycle marketing.
+    rulesets: [baseline, improved]
+
+  - key: subscriptions_customer_id_not_null
+    name: Subscription has a customer
+    category: missing_identifier
+    type: not_null
+    asset: stg_rebill__subscriptions
+    columns: [customer_id]
+    severity: high
+    business_impact: Recurring revenue that cannot be attributed to a customer.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ duplicate identifiers
+  - key: orders_order_id_unique
+    name: Order ID is unique
+    category: duplicate_identifier
+    type: unique
+    asset: stg_shopfront__orders
+    columns: [order_id]
+    severity: critical
+    business_impact: Duplicate orders double-count revenue in every downstream revenue mart.
+    rulesets: [baseline, improved]
+
+  - key: payments_payment_id_unique
+    name: Payment ID is unique
+    category: duplicate_identifier
+    type: unique
+    asset: stg_payrail__payments
+    columns: [payment_id]
+    severity: critical
+    business_impact: Duplicate captures overstate cash collected at month-end close.
+    rulesets: [baseline, improved]
+
+  - key: customers_customer_id_unique
+    name: Customer ID is unique
+    category: duplicate_identifier
+    type: unique
+    asset: stg_shopfront__customers
+    columns: [customer_id]
+    severity: critical
+    business_impact: Duplicate customers fan out joins and inflate customer counts.
+    rulesets: [baseline, improved]
+
+  - key: subscriptions_subscription_id_unique
+    name: Subscription ID is unique
+    category: duplicate_identifier
+    type: unique
+    asset: stg_rebill__subscriptions
+    columns: [subscription_id]
+    severity: high
+    business_impact: Duplicate subscriptions overstate MRR.
+    rulesets: [baseline, improved]
+
+  - key: refunds_refund_id_unique
+    name: Refund ID is unique
+    category: duplicate_identifier
+    type: unique
+    asset: stg_payrail__refunds
+    columns: [refund_id]
+    severity: high
+    business_impact: Duplicate refunds understate net revenue.
+    rulesets: [baseline, improved]
+
+  - key: order_items_order_item_id_unique
+    name: Order line ID is unique
+    category: duplicate_identifier
+    type: unique
+    asset: stg_shopfront__order_items
+    columns: [order_item_id]
+    severity: medium
+    business_impact: Duplicate lines inflate units and product sales.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ broken relationships
+  - key: orders_customer_exists
+    name: Order customer exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_shopfront__orders
+    columns: [customer_id]
+    params: {column: customer_id, to_asset: stg_shopfront__customers, to_column: customer_id}
+    severity: critical
+    business_impact: Orphaned orders lose customer attributes, breaking CLV, health scores and active-customer KPIs.
+    rulesets: [baseline, improved]
+
+  - key: order_items_order_exists
+    name: Order line order exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_shopfront__order_items
+    columns: [order_id]
+    params: {column: order_id, to_asset: stg_shopfront__orders, to_column: order_id}
+    severity: high
+    business_impact: Lines for unknown orders are excluded from revenue.
+    rulesets: [baseline, improved]
+
+  - key: order_items_product_exists
+    name: Order line product exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_shopfront__order_items
+    columns: [product_id]
+    params: {column: product_id, to_asset: stg_shopfront__products, to_column: product_id}
+    severity: medium
+    business_impact: Sales for unknown products are missing from category reporting.
+    rulesets: [baseline, improved]
+
+  - key: payments_order_exists
+    name: Payment order exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_payrail__payments
+    columns: [order_id]
+    params: {column: order_id, to_asset: stg_shopfront__orders, to_column: order_id}
+    severity: high
+    business_impact: Cash for unknown orders cannot be reconciled to revenue.
+    rulesets: [baseline, improved]
+
+  - key: payments_customer_exists
+    name: Payment customer exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_payrail__payments
+    columns: [customer_id]
+    params: {column: customer_id, to_asset: stg_shopfront__customers, to_column: customer_id}
+    severity: high
+    business_impact: Captures for unknown customers block chargeback handling.
+    rulesets: [baseline, improved]
+
+  - key: refunds_payment_exists
+    name: Refund payment exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_payrail__refunds
+    columns: [payment_id]
+    params: {column: payment_id, to_asset: stg_payrail__payments, to_column: payment_id}
+    severity: critical
+    business_impact: Refunds that reverse unknown payments cannot be netted against revenue.
+    rulesets: [baseline, improved]
+
+  - key: subscriptions_customer_exists
+    name: Subscription customer exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_rebill__subscriptions
+    columns: [customer_id]
+    params: {column: customer_id, to_asset: stg_shopfront__customers, to_column: customer_id}
+    severity: high
+    business_impact: MRR attributed to unknown customers.
+    rulesets: [baseline, improved]
+
+  - key: tickets_customer_exists
+    name: Ticket customer exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_deskline__tickets
+    columns: [customer_id]
+    params: {column: customer_id, to_asset: stg_shopfront__customers, to_column: customer_id}
+    severity: medium
+    business_impact: Support history missing from customer health.
+    rulesets: [baseline, improved]
+
+  - key: orders_campaign_exists
+    name: Order campaign exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_shopfront__orders
+    columns: [campaign_id]
+    params: {column: campaign_id, to_asset: stg_campaignhub__campaigns, to_column: campaign_id}
+    severity: low
+    business_impact: Attributed revenue lost from campaign ROAS.
+    rulesets: [baseline, improved]
+
+  - key: orders_subscription_exists
+    name: Renewal order subscription exists
+    category: broken_relationship
+    type: relationship
+    asset: stg_shopfront__orders
+    columns: [subscription_id]
+    params: {column: subscription_id, to_asset: stg_rebill__subscriptions, to_column: subscription_id}
+    severity: medium
+    business_impact: Renewal revenue cannot be tied back to its subscription plan.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ invalid dates
+  - key: orders_ordered_at_not_future
+    name: Order date is not in the future
+    category: invalid_date
+    type: not_future
+    asset: stg_shopfront__orders
+    columns: [ordered_at]
+    params: {column: ordered_at}
+    severity: high
+    business_impact: Future-dated orders land in the wrong revenue period.
+    rulesets: [baseline, improved]
+
+  - key: payments_processed_at_not_future
+    name: Payment date is not in the future
+    category: invalid_date
+    type: not_future
+    asset: stg_payrail__payments
+    columns: [processed_at]
+    params: {column: processed_at}
+    severity: high
+    business_impact: Future-dated cash lands in the wrong close period.
+    rulesets: [baseline, improved]
+
+  - key: refunds_refunded_at_not_future
+    name: Refund date is not in the future
+    category: invalid_date
+    type: not_future
+    asset: stg_payrail__refunds
+    columns: [refunded_at]
+    params: {column: refunded_at}
+    severity: medium
+    business_impact: Future-dated refunds distort refund rates.
+    rulesets: [baseline, improved]
+
+  - key: customers_signup_after_launch
+    name: Signup date is within trading history
+    category: invalid_date
+    type: range
+    asset: stg_shopfront__customers
+    columns: [signed_up_at]
+    params: {column: signed_up_at, min: "2023-06-01", max_reference: true}
+    severity: medium
+    business_impact: Impossible signup dates break cohort and tenure calculations.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ chronology
+  - key: payments_after_order
+    name: Payment is processed after checkout
+    category: chronology
+    type: chronology
+    asset: stg_payrail__payments
+    columns: [processed_at]
+    params:
+      later_column: processed_at
+      reference_asset: stg_shopfront__orders
+      join: {order_id: order_id}
+      earlier_column: ordered_at
+    severity: high
+    business_impact: Captures before checkout indicate clock or matching errors and misstate cash timing.
+    rulesets: [baseline, improved]
+
+  - key: refunds_after_payment
+    name: Refund is issued after the payment
+    category: chronology
+    type: chronology
+    asset: stg_payrail__refunds
+    columns: [refunded_at]
+    params:
+      later_column: refunded_at
+      reference_asset: stg_payrail__payments
+      join: {payment_id: payment_id}
+      earlier_column: processed_at
+    severity: high
+    business_impact: Refunds dated before their payment are impossible and misstate refund periods.
+    rulesets: [baseline, improved]
+
+  - key: subscriptions_end_after_start
+    name: Subscription ends after it starts
+    category: chronology
+    type: chronology
+    asset: stg_rebill__subscriptions
+    columns: [ended_on, started_on]
+    params: {later_column: ended_on, earlier_column: started_on}
+    severity: high
+    business_impact: Negative tenure corrupts retention and MRR history.
+    rulesets: [baseline, improved]
+
+  - key: tickets_solved_after_opened
+    name: Ticket is solved after it is opened
+    category: chronology
+    type: chronology
+    asset: stg_deskline__tickets
+    columns: [solved_at, opened_at]
+    params: {later_column: solved_at, earlier_column: opened_at}
+    severity: low
+    business_impact: Negative resolution times distort support SLA reporting.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ invalid categorical values
+  - key: orders_status_accepted_values
+    name: Order status is a known value
+    category: invalid_category
+    type: accepted_values
+    asset: stg_shopfront__orders
+    columns: [order_status]
+    params: {column: order_status, values: [placed, shipped, delivered, cancelled, returned]}
+    severity: high
+    business_impact: Unknown statuses are neither counted as revenue nor excluded deliberately.
+    rulesets: [baseline, improved]
+
+  - key: orders_currency_accepted_values
+    name: Order currency is supported
+    category: invalid_category
+    type: accepted_values
+    asset: stg_shopfront__orders
+    columns: [currency]
+    params: {column: currency, values: [USD, CAD, GBP]}
+    severity: high
+    business_impact: Unsupported currencies are summed at face value in revenue reports.
+    rulesets: [baseline, improved]
+
+  - key: payments_status_accepted_values
+    name: Payment status is a known value
+    category: invalid_category
+    type: accepted_values
+    asset: stg_payrail__payments
+    columns: [payment_status]
+    params: {column: payment_status, values: [succeeded, failed, pending]}
+    severity: critical
+    business_impact: Unknown statuses are excluded from cash collected.
+    rulesets: [baseline, improved]
+
+  - key: subscriptions_status_accepted_values
+    name: Subscription status is a known value
+    category: invalid_category
+    type: accepted_values
+    asset: stg_rebill__subscriptions
+    columns: [subscription_status]
+    params: {column: subscription_status, values: [active, paused, cancelled]}
+    severity: high
+    business_impact: Unknown statuses are excluded from MRR.
+    rulesets: [baseline, improved]
+
+  - key: customers_status_accepted_values
+    name: Customer status is a known value
+    category: invalid_category
+    type: accepted_values
+    asset: stg_shopfront__customers
+    columns: [customer_status]
+    params: {column: customer_status, values: [active, inactive, churned]}
+    severity: medium
+    business_impact: Unknown statuses fall out of active-customer counts.
+    rulesets: [baseline, improved]
+
+  - key: tickets_channel_accepted_values
+    name: Ticket channel is a known value
+    category: invalid_category
+    type: accepted_values
+    asset: stg_deskline__tickets
+    columns: [channel]
+    params: {column: channel, values: [email, chat, phone, social]}
+    severity: low
+    business_impact: Channel mix reporting in Deskline shows an unmapped bucket.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ inconsistent statuses
+  - key: subscriptions_active_not_ended
+    name: Active subscription has not ended
+    category: inconsistent_status
+    type: row_condition
+    asset: stg_rebill__subscriptions
+    columns: [subscription_status, ended_on]
+    params: {invalid_when: "subscription_status = 'active' AND ended_on < {reference_ts}::date"}
+    severity: high
+    business_impact: Ended subscriptions still marked active overstate MRR and active subscriber counts.
+    rulesets: [baseline, improved]
+
+  - key: subscriptions_cancelled_has_end_date
+    name: Cancelled subscription has an end date
+    category: inconsistent_status
+    type: row_condition
+    asset: stg_rebill__subscriptions
+    columns: [subscription_status, ended_on]
+    params: {invalid_when: "subscription_status = 'cancelled' AND ended_on IS NULL"}
+    severity: medium
+    business_impact: Tenure and churn timing cannot be computed.
+    rulesets: [baseline, improved]
+
+  - key: tickets_solved_has_solved_at
+    name: Solved ticket has a solved timestamp
+    category: inconsistent_status
+    type: row_condition
+    asset: stg_deskline__tickets
+    columns: [ticket_status, solved_at]
+    params: {invalid_when: "ticket_status IN ('solved', 'closed') AND solved_at IS NULL"}
+    severity: low
+    business_impact: Resolution time is missing from SLA reporting.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ invalid numeric values
+  - key: order_items_quantity_positive
+    name: Order line quantity is positive
+    category: invalid_numeric
+    type: range
+    asset: stg_shopfront__order_items
+    columns: [quantity]
+    params: {column: quantity, min: 1}
+    severity: high
+    business_impact: Non-positive quantities reduce units and line revenue.
+    rulesets: [baseline, improved]
+
+  - key: payments_succeeded_amount_positive
+    name: Successful payment amount is positive
+    category: invalid_numeric
+    type: range
+    asset: stg_payrail__payments
+    columns: [amount]
+    where: "payment_status = 'succeeded'"
+    params: {column: amount, min: 0, min_exclusive: true}
+    severity: high
+    business_impact: Zero or negative captures misstate cash collected.
+    rulesets: [baseline]
+
+  - key: payments_succeeded_amount_valid
+    name: Successful payment amount is valid for its order
+    category: invalid_numeric
+    type: row_condition
+    asset: stg_payrail__payments
+    columns: [amount]
+    where: "payment_status = 'succeeded'"
+    params:
+      invalid_when: >
+        amount < 0 OR (amount = 0 AND NOT EXISTS (
+          SELECT 1 FROM {ref:stg_shopfront__orders} o WHERE o.order_id = p.order_id AND o.total_amount = 0))
+    severity: high
+    business_impact: Negative captures, or $0 captures on orders that cost money, misstate cash collected.
+    rulesets: [improved]
+    supersedes: payments_succeeded_amount_positive
+    rationale: >
+      Baseline false positive HO-059: PayRail records a $0.00 succeeded authorisation for fully discounted
+      (support replacement) orders. A $0 capture is valid exactly when the order total is $0.
+
+  - key: orders_total_non_negative
+    name: Order total is not negative
+    category: invalid_numeric
+    type: range
+    asset: stg_shopfront__orders
+    columns: [total_amount]
+    params: {column: total_amount, min: 0}
+    severity: high
+    business_impact: Negative order totals reduce reported revenue.
+    rulesets: [baseline, improved]
+
+  - key: refunds_amount_positive
+    name: Refund amount is positive
+    category: invalid_numeric
+    type: range
+    asset: stg_payrail__refunds
+    columns: [refund_amount]
+    params: {column: refund_amount, min: 0, min_exclusive: true}
+    severity: high
+    business_impact: Non-positive refunds corrupt refund totals.
+    rulesets: [baseline, improved]
+
+  - key: tickets_csat_in_range
+    name: CSAT score is between 1 and 5
+    category: invalid_numeric
+    type: range
+    asset: stg_deskline__tickets
+    columns: [csat_score]
+    params: {column: csat_score, min: 1, max: 5}
+    severity: low
+    business_impact: Out-of-range ratings distort average CSAT.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ cross-table reconciliation
+  - key: orders_subtotal_matches_items
+    name: Order subtotal equals the sum of its lines
+    category: reconciliation
+    type: aggregate_reconciliation
+    asset: stg_shopfront__orders
+    columns: [subtotal_amount]
+    params:
+      child_asset: stg_shopfront__order_items
+      join: {order_id: order_id}
+      primary_expression: p.subtotal_amount
+      child_aggregate: sum(c.line_amount)
+      comparison: equal
+      tolerance: 0.01
+    severity: critical
+    business_impact: Gross sales disagree with product-level sales; finance and merchandising numbers diverge.
+    rulesets: [baseline, improved]
+
+  - key: orders_total_formula
+    name: Order total equals subtotal - discount + shipping + tax
+    category: reconciliation
+    type: row_condition
+    asset: stg_shopfront__orders
+    columns: [total_amount, subtotal_amount, discount_amount, shipping_amount, tax_amount]
+    params: {invalid_when: "abs(total_amount - (subtotal_amount - discount_amount + shipping_amount + tax_amount)) > 0.01"}
+    severity: critical
+    business_impact: Charged amounts that do not follow the pricing formula break revenue and tax reporting.
+    rulesets: [baseline, improved]
+
+  - key: order_items_line_amount_formula
+    name: Line amount equals quantity x unit price
+    category: reconciliation
+    type: row_condition
+    asset: stg_shopfront__order_items
+    columns: [line_amount, quantity, unit_price]
+    params: {invalid_when: "abs(line_amount - quantity * unit_price) > 0.01"}
+    severity: high
+    business_impact: Line revenue does not match units sold.
+    rulesets: [baseline, improved]
+
+  - key: orders_paid_amount_matches_total
+    name: Captured cash equals the order total
+    category: reconciliation
+    type: aggregate_reconciliation
+    asset: stg_shopfront__orders
+    columns: [total_amount]
+    params:
+      child_asset: stg_payrail__payments
+      join: {order_id: order_id}
+      child_where: "c.payment_status = 'succeeded'"
+      primary_expression: p.total_amount
+      child_aggregate: sum(c.amount)
+      comparison: equal
+      tolerance: 0.01
+    severity: critical
+    business_impact: Revenue and cash collected disagree at month-end close.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ financial consistency
+  - key: refunds_not_exceeding_payment
+    name: Refund does not exceed its payment
+    category: financial_consistency
+    type: join_condition
+    asset: stg_payrail__refunds
+    columns: [refund_amount]
+    params:
+      reference_asset: stg_payrail__payments
+      join: {payment_id: payment_id}
+      invalid_when: "p.refund_amount > r.amount + 0.01"
+      context_columns: [amount, payment_status]
+    severity: critical
+    business_impact: Refunding more than was captured loses cash and understates net revenue.
+    rulesets: [baseline]
+
+  - key: refunds_cumulative_not_exceeding_payment
+    name: Total refunds do not exceed the payment
+    category: financial_consistency
+    type: aggregate_reconciliation
+    asset: stg_payrail__payments
+    columns: [amount]
+    params:
+      child_asset: stg_payrail__refunds
+      join: {payment_id: payment_id}
+      primary_expression: p.amount
+      child_aggregate: sum(c.refund_amount)
+      comparison: child_lte_primary
+      tolerance: 0.01
+    severity: critical
+    business_impact: Refunding more than was captured loses cash and understates net revenue.
+    rulesets: [improved]
+    supersedes: refunds_not_exceeding_payment
+    rationale: >
+      Baseline false negative HO-050: the baseline compared each refund to the payment in isolation, so two
+      partial refunds that are individually valid but together exceed the capture were missed.
+
+  - key: payments_currency_matches_order
+    name: Payment currency matches the order
+    category: financial_consistency
+    type: join_condition
+    asset: stg_payrail__payments
+    columns: [currency]
+    params:
+      reference_asset: stg_shopfront__orders
+      join: {order_id: order_id}
+      invalid_when: "p.currency <> r.currency"
+      context_columns: [currency]
+    severity: high
+    business_impact: Cash recorded in a different currency than revenue cannot be reconciled.
+    rulesets: [baseline, improved]
+
+  # ------------------------------------------------------------------ business rules
+  - key: orders_discount_not_exceeding_subtotal
+    name: Discount does not exceed the subtotal
+    category: business_rule
+    type: row_condition
+    asset: stg_shopfront__orders
+    columns: [discount_amount, subtotal_amount]
+    params: {invalid_when: "discount_amount > subtotal_amount + 0.01 OR discount_amount < 0"}
+    severity: high
+    business_impact: Over-discounting produces negative revenue.
+    rulesets: [baseline, improved]
+
+  - key: payments_customer_matches_order
+    name: Payment customer matches the order customer
+    category: business_rule
+    type: join_condition
+    asset: stg_payrail__payments
+    columns: [customer_id]
+    params:
+      reference_asset: stg_shopfront__orders
+      join: {order_id: order_id}
+      invalid_when: "p.customer_id IS DISTINCT FROM r.customer_id"
+      context_columns: [customer_id]
+    severity: critical
+    business_impact: Cash attributed to the wrong customer corrupts customer cash history, CLV and chargeback handling.
+    rulesets: [improved]
+    rationale: >
+      Baseline false negative HO-036: the baseline validated payment.order_id and payment.customer_id
+      independently, so a capture pointing at a real order and a real but different customer passed.

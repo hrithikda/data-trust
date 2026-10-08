@@ -1,0 +1,124 @@
+{
+  "suite": "regression",
+  "detector_version": "improved",
+  "cases_hash": "488826922b3350f2",
+  "confusion_matrix": {
+    "true_positives": 6,
+    "false_negatives": 0,
+    "false_positives": 0,
+    "true_negatives": 4,
+    "total": 10,
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0,
+    "specificity": 1.0
+  },
+  "errors": [],
+  "predictions": [
+    {
+      "case_id": "RG-001",
+      "title": "Three partial refunds that together exceed the payment",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "refunds_cumulative_not_exceeding_payment"
+      ],
+      "defect_category": "financial_consistency"
+    },
+    {
+      "case_id": "RG-002",
+      "title": "Refunds exceed one leg of a split tender",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "refunds_cumulative_not_exceeding_payment"
+      ],
+      "defect_category": "financial_consistency"
+    },
+    {
+      "case_id": "RG-003",
+      "title": "Customer mismatch on the second leg of a split tender",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_customer_matches_order"
+      ],
+      "defect_category": "business_rule"
+    },
+    {
+      "case_id": "RG-004",
+      "title": "Spurious $0.00 capture on an order that costs money",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_succeeded_amount_valid"
+      ],
+      "defect_category": "invalid_numeric"
+    },
+    {
+      "case_id": "RG-005",
+      "title": "$0.00 capture for an order that does not exist",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "payments_order_exists",
+        "payments_succeeded_amount_valid"
+      ],
+      "defect_category": "invalid_numeric"
+    },
+    {
+      "case_id": "RG-006",
+      "title": "Negative capture on a fully discounted order",
+      "expected": "defective",
+      "predicted": "defective",
+      "outcome": "TP",
+      "triggered_rules": [
+        "orders_paid_amount_matches_total",
+        "payments_succeeded_amount_valid"
+      ],
+      "defect_category": "invalid_numeric"
+    },
+    {
+      "case_id": "RG-007",
+      "title": "Three partial refunds that exactly equal the payment",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "RG-008",
+      "title": "$0.00 authorisation on a fully discounted two-line order",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "RG-009",
+      "title": "Split tender where both legs belong to the order's customer",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    },
+    {
+      "case_id": "RG-010",
+      "title": "Refunds spread across both legs of a split tender",
+      "expected": "valid",
+      "predicted": "valid",
+      "outcome": "TN",
+      "triggered_rules": [],
+      "defect_category": null
+    }
+  ]
+}

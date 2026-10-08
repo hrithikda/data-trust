@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datatrust"
+version = "1.0.0"
+description = "DataTrust: a data quality and lineage workbench for analytics teams."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "dbt-core>=1.8,<2.0",
+    "dbt-postgres>=1.8,<2.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "pandas>=2.2,<3.0",
+    "plotly>=5.24,<6.0",
+    "networkx>=3.3,<4.0",
+    "pydantic>=2.8,<3.0",
+    "pydantic-settings>=2.4,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "pyyaml>=6.0,<7.0",
+    "streamlit>=1.38,<2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-cov>=5.0", "ruff>=0.6"]
+docs = ["playwright>=1.47"]  # scripts/capture_screenshots.py only
+
+[project.scripts]
+datatrust = "datatrust.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["datatrust*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "db: requires a reachable PostgreSQL database",
+    "integration: end-to-end test that builds the warehouse with dbt (slow)",
+]
+addopts = "-ra"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.setuptools.package-data]
+"datatrust.sql" = ["*.sql"]

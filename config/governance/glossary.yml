@@ -1,0 +1,227 @@
+# Business glossary. Each term links to the physical assets (and optionally columns) that implement it.
+# Link syntax: "<asset>" or "<asset>.<column>". Links are validated against dbt metadata on ingestion.
+terms:
+  - key: customer
+    name: Customer
+    domain: customer
+    owner: customer_data
+    steward: Wei Zhang
+    status: approved
+    definition: A person with a Shopfront account who has signed up or checked out at least once.
+    synonyms: [shopper, account holder]
+    related: [customer_status, customer_lifetime_value]
+    links: [stg_shopfront__customers.customer_id, dim_customers.customer_id, fct_orders.customer_id, stg_payrail__payments.customer_id]
+
+  - key: customer_status
+    name: Customer Status
+    domain: customer
+    owner: customer_data
+    steward: Wei Zhang
+    status: approved
+    definition: >
+      Lifecycle state of a customer. Active - ordered in the last 90 days or holds an active subscription;
+      Inactive - last order 91-365 days ago, or never ordered and signed up over 30 days ago; Churned - no order in over a year.
+    calculation: Maintained by the Shopfront lifecycle job; values active, inactive, churned.
+    related: [customer, churned_customer]
+    links: [stg_shopfront__customers.customer_status, dim_customers.customer_status]
+
+  - key: churned_customer
+    name: Churned Customer
+    domain: customer
+    owner: customer_data
+    steward: Wei Zhang
+    status: approved
+    definition: A customer whose most recent order is more than 365 days old and who holds no active subscription.
+    related: [customer_status]
+    links: [dim_customers.customer_status, customer_health_scores]
+
+  - key: active_subscription
+    name: Active Subscription
+    domain: subscriptions
+    owner: commerce
+    steward: Dana Whitfield
+    status: approved
+    definition: >
+      A Rebill subscription whose status is 'active'. An active subscription must not have an end date in the past;
+      a future end date is allowed for prepaid terms.
+    calculation: subscription_status = 'active' AND (ended_on IS NULL OR ended_on >= reference date)
+    synonyms: [subscriber]
+    related: [monthly_recurring_revenue]
+    links: [stg_rebill__subscriptions.subscription_status, int_subscriptions__mrr.is_active, fct_subscriptions.subscription_status]
+
+  - key: monthly_recurring_revenue
+    name: Monthly Recurring Revenue (MRR)
+    domain: finance
+    owner: finance_analytics
+    steward: Priya Raman
+    status: approved
+    definition: Sum of monthly-normalised subscription prices across active subscriptions. Biweekly plans count 26/12 cycles per month.
+    calculation: SUM(monthly_amount) WHERE active subscription
+    synonyms: [MRR, recurring revenue]
+    related: [active_subscription]
+    links: [stg_rebill__subscriptions.monthly_amount, int_subscriptions__mrr.mrr, fct_subscriptions.mrr, rpt_executive_kpis.ending_mrr]
+
+  - key: order
+    name: Order
+    domain: commerce
+    owner: commerce
+    steward: Dana Whitfield
+    status: approved
+    definition: A checkout in Shopfront, including subscription renewals created by Rebill. Identified by a unique order_id.
+    related: [order_value, net_revenue]
+    links: [stg_shopfront__orders.order_id, int_orders__enriched.order_id, fct_orders.order_id]
+
+  - key: order_value
+    name: Order Value
+    domain: commerce
+    owner: commerce
+    steward: Dana Whitfield
+    status: approved
+    definition: The amount charged to the customer for an order - subtotal less discount, plus shipping and tax.
+    calculation: total_amount = subtotal_amount - discount_amount + shipping_amount + tax_amount
+    synonyms: [order total, basket value]
+    related: [average_order_value]
+    links: [stg_shopfront__orders.total_amount, fct_orders.total_amount]
+
+  - key: average_order_value
+    name: Average Order Value (AOV)
+    domain: finance
+    owner: finance_analytics
+    steward: Priya Raman
+    status: approved
+    definition: Net revenue divided by the number of revenue orders in a period.
+    synonyms: [AOV]
+    related: [net_revenue, order_value]
+    links: [fct_daily_revenue.average_order_value, rpt_executive_kpis.average_order_value]
+
+  - key: successful_payment
+    name: Successful Payment
+    domain: payments
+    owner: payments
+    steward: Marcus Oyelaran
+    status: approved
+    definition: >
+      A PayRail attempt with status 'succeeded' that captured funds for an existing order belonging to the same customer.
+      Amounts must be positive, except a $0.00 authorisation recorded for fully discounted orders.
+    synonyms: [capture, settled payment]
+    related: [refund, net_revenue]
+    links: [stg_payrail__payments.payment_status, stg_payrail__payments.amount, fct_payments.amount, int_orders__payment_summary.amount_paid]
+
+  - key: refund
+    name: Refund
+    domain: payments
+    owner: payments
+    steward: Marcus Oyelaran
+    status: approved
+    definition: Money returned to a customer against a successful payment. Multiple partial refunds are allowed, but their total can never exceed the captured amount.
+    related: [successful_payment, net_revenue]
+    links: [stg_payrail__refunds.refund_amount, int_payments__with_refunds.refunded_amount, fct_daily_revenue.refunds]
+
+  - key: gross_revenue
+    name: Gross Sales
+    domain: finance
+    owner: finance_analytics
+    steward: Priya Raman
+    status: approved
+    definition: Sum of order subtotals (line amounts before discounts, shipping and tax) for revenue orders.
+    synonyms: [gross merchandise value, GMV]
+    related: [net_revenue]
+    links: [fct_daily_revenue.gross_sales, fin_monthly_revenue_close.gross_sales]
+
+  - key: net_revenue
+    name: Net Revenue
+    domain: finance
+    owner: finance_analytics
+    steward: Priya Raman
+    status: approved
+    definition: >
+      Recognised revenue: order total excluding tax, less refunds, for orders that are not cancelled and have at least one
+      successful payment. Reported on an order-date basis.
+    calculation: total_amount - tax_amount - amount_refunded (revenue orders only)
+    synonyms: [revenue, recognised revenue]
+    related: [gross_revenue, refund, average_order_value]
+    links: [int_orders__enriched.net_revenue, fct_orders.net_revenue, fct_daily_revenue.net_revenue, fin_monthly_revenue_close.net_revenue, rpt_executive_kpis.net_revenue]
+
+  - key: cash_collected
+    name: Cash Collected
+    domain: finance
+    owner: finance_analytics
+    steward: Priya Raman
+    status: approved
+    definition: Sum of succeeded PayRail captures in a period, reconciled against net revenue at month-end close.
+    related: [successful_payment, net_revenue]
+    links: [fin_monthly_revenue_close.cash_collected, rpt_executive_kpis.cash_collected]
+
+  - key: customer_lifetime_value
+    name: Customer Lifetime Value (CLV)
+    domain: customer
+    owner: customer_data
+    steward: Wei Zhang
+    status: approved
+    definition: Realised net revenue from a customer plus a 12-month forward estimate weighted by retention likelihood. Drives loyalty tiers.
+    synonyms: [CLV, LTV]
+    related: [net_revenue, customer_health_score]
+    links: [int_customers__order_history.lifetime_net_revenue, customer_lifetime_value.customer_lifetime_value, customer_lifetime_value.clv_tier]
+
+  - key: customer_health_score
+    name: Customer Health Score
+    domain: customer_experience
+    owner: customer_data
+    steward: Hannah Osei
+    status: approved
+    definition: 0-100 score from purchase recency, subscription status, support experience and customer value. Below 40 is critical.
+    related: [customer_lifetime_value, csat]
+    links: [customer_health_scores.health_score, customer_health_scores.health_band, rpt_executive_kpis.avg_health_score]
+
+  - key: acquisition_source
+    name: Acquisition Source
+    domain: growth
+    owner: growth_analytics
+    steward: Tomás Echeverría
+    status: approved
+    definition: The marketing channel credited with a customer's signup (first touch), e.g. paid_search, referral, influencer.
+    synonyms: [acquisition channel, first touch]
+    related: [campaign_attribution]
+    links: [stg_shopfront__customers.acquisition_channel, dim_customers.acquisition_channel, fct_orders.customer_acquisition_channel]
+
+  - key: campaign_attribution
+    name: Campaign Attribution
+    domain: growth
+    owner: growth_analytics
+    steward: Tomás Echeverría
+    status: draft
+    definition: >
+      Credit for a revenue order assigned to the campaign whose promo code was applied at checkout. Under review:
+      multi-touch attribution is planned to replace promo-code attribution.
+    related: [acquisition_source, customer_acquisition_cost]
+    links: [int_campaigns__attributed_orders, campaign_performance.attributed_revenue]
+
+  - key: customer_acquisition_cost
+    name: Customer Acquisition Cost (CAC)
+    domain: growth
+    owner: growth_analytics
+    steward: Tomás Echeverría
+    status: approved
+    definition: Campaign spend divided by customers whose first order was attributed to the campaign.
+    synonyms: [CAC]
+    related: [campaign_attribution]
+    links: [campaign_performance.customer_acquisition_cost, rpt_executive_kpis.blended_cac]
+
+  - key: csat
+    name: Customer Satisfaction (CSAT)
+    domain: customer_experience
+    owner: customer_experience
+    steward: Hannah Osei
+    status: approved
+    definition: The 1-5 rating a customer gives after a support ticket is solved. Averaged over rated tickets only.
+    links: [stg_deskline__tickets.csat_score, int_customers__support_summary.avg_csat]
+
+  - key: legacy_customer_tier
+    name: Legacy Customer Tier
+    domain: customer
+    owner: customer_data
+    steward: Wei Zhang
+    status: deprecated
+    definition: Spend-band tier used before 2025. Replaced by CLV tiers; kept for historical reports only.
+    related: [customer_lifetime_value]
+    links: [customer_lifetime_value.clv_tier]

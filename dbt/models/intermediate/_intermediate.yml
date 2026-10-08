@@ -1,0 +1,112 @@
+version: 2
+
+models:
+  - name: int_payments__with_refunds
+    description: Each PayRail payment attempt with the total refunded against it and its net cash effect.
+    config:
+      meta: {owner: payments, domain: payments, criticality: high, primary_key: [payment_id]}
+    columns:
+      - name: payment_id
+        description: PayRail charge identifier.
+        config: {meta: {critical: true, cde_category: identifier, critical_reason: "Grain of cash reconciliation."}}
+      - name: order_id
+        description: Order the payment settles.
+        config: {meta: {critical: true, cde_category: identifier, critical_reason: "Links cash to orders."}}
+      - name: refunded_amount
+        description: Sum of refunds issued against the payment.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Reduces net revenue."}}
+      - name: net_amount
+        description: Captured amount (succeeded only) minus refunds.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Net cash collected."}}
+
+  - name: int_orders__payment_summary
+    description: Cash position per order - successful captures, failed attempts, refunds and first capture time.
+    config:
+      meta: {owner: payments, domain: payments, criticality: high, primary_key: [order_id]}
+    columns:
+      - name: order_id
+        description: Shopfront order number.
+      - name: amount_paid
+        description: Sum of succeeded payment amounts.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Cash collected per order."}}
+      - name: amount_refunded
+        description: Sum of refunds across all payments of the order.
+
+  - name: int_orders__item_summary
+    description: Order-line rollup per order with units, items subtotal and product category mix.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: medium, primary_key: [order_id]}
+    columns:
+      - name: order_id
+        description: Shopfront order number.
+      - name: items_subtotal
+        description: Sum of line amounts; should equal the order header subtotal.
+
+  - name: int_orders__enriched
+    description: >
+      Order header joined to its lines and cash. Defines net_revenue: order total excluding tax, less refunds,
+      for non-cancelled orders with a successful payment.
+    config:
+      meta: {owner: commerce, domain: commerce, criticality: critical, primary_key: [order_id]}
+    columns:
+      - name: order_id
+        description: Shopfront order number.
+        config: {meta: {critical: true, cde_category: identifier, critical_reason: "Order grain for every revenue mart."}}
+      - name: customer_id
+        description: Purchasing customer.
+        config: {meta: {critical: true, cde_category: customer_identifier, critical_reason: "Customer revenue attribution."}}
+      - name: is_revenue_order
+        description: True when the order is not cancelled and has at least one successful payment.
+      - name: net_revenue
+        description: total_amount - tax_amount - refunds for revenue orders, else 0.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Canonical revenue measure."}}
+      - name: balance_due
+        description: Order total minus captured cash; non-zero indicates unpaid or over-collected orders.
+
+  - name: int_customers__order_history
+    description: Purchase history per customer (first/last order, order count, lifetime net revenue).
+    config:
+      meta: {owner: customer_data, domain: customer, criticality: high, primary_key: [customer_id]}
+    columns:
+      - name: customer_id
+        description: Shopfront customer identifier.
+        config: {meta: {critical: true, cde_category: customer_identifier, critical_reason: "Customer grain."}}
+      - name: lifetime_net_revenue
+        description: Sum of net revenue across the customer's orders.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Basis of customer lifetime value."}}
+
+  - name: int_subscriptions__mrr
+    description: Monthly recurring revenue contribution per subscription, based on the Rebill-reported status.
+    config:
+      meta: {owner: commerce, domain: subscriptions, criticality: critical, primary_key: [subscription_id]}
+    columns:
+      - name: subscription_id
+        description: Rebill subscription identifier.
+      - name: is_active
+        description: Rebill status is 'active'.
+        config: {meta: {critical: true, cde_category: status, critical_reason: "Active subscription count."}}
+      - name: mrr
+        description: monthly_amount for active subscriptions, else 0.
+        config: {meta: {critical: true, cde_category: financial, critical_reason: "Monthly recurring revenue."}}
+
+  - name: int_customers__support_summary
+    description: Support experience per customer - ticket volume, escalations, open tickets and average CSAT.
+    config:
+      meta: {owner: customer_experience, domain: customer_experience, criticality: medium, primary_key: [customer_id]}
+    columns:
+      - name: customer_id
+        description: Customer who raised tickets.
+      - name: avg_csat
+        description: Mean satisfaction score across rated tickets.
+
+  - name: int_campaigns__attributed_orders
+    description: Revenue orders credited to a campaign through its promo code, flagged when they were the customer's first order.
+    config:
+      meta: {owner: growth_analytics, domain: growth, criticality: medium, primary_key: [order_id]}
+    columns:
+      - name: order_id
+        description: Attributed order.
+      - name: campaign_id
+        description: Credited campaign.
+      - name: is_new_customer_order
+        description: True when this was the customer's first order (campaign acquired the customer).
