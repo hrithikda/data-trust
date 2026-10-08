@@ -420,7 +420,7 @@ says which `make` target to run instead of raising an error. Pages deep-link to 
 macOS with Python 3.12, dbt-core 1.12 and PostgreSQL 15.
 
 ```bash
-git clone <this repo> && cd data-trust
+git clone https://github.com/hrithikda/data-trust.git && cd data-trust
 make install          # .venv with DataTrust + dev tools; copies .env.example to .env
 make db-up            # PostgreSQL 15 in Docker (skip if you have a local server; see below)
 make pipeline         # init-db → generate → dbt → ingest → profile → quality → triage → evaluate (~30 s)
