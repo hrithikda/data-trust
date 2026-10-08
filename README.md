@@ -148,7 +148,7 @@ score:
 
 - **HO-050, missed.** Two partial refunds of 26.00 and 22.00 on a 44.00 payment. My rule compared each refund
   to the payment, and each one on its own was fine. Together they refunded 4.00 more than was collected. The
-  rule checked something that's really about the total one row at a time.
+  rule checked one row at a time, but the real constraint is on the total.
 - **HO-036, missed.** After an account merge, a payment for customer C1001's order was recorded against C1002.
   I checked that the payment's order existed and that its customer existed, and both did. Nothing checked
   that they agreed with each other.
