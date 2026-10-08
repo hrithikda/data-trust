@@ -1,229 +1,58 @@
-# DataTrust: Data Quality and Lineage Workbench
+# DataTrust
 
-DataTrust is a metadata, data quality and lineage workbench for an analytics warehouse. It tells a data team
-not only *that* a check failed but **what failed, where the data came from, who owns it, what depends on it,
-which business concepts are exposed, what to fix first, and how good the detector is at finding real problems.**
+A data quality and lineage workbench I built on PostgreSQL, dbt and Streamlit.
 
-It runs against a complete, reproducible warehouse for a fictional company (Copperleaf Coffee Co.): five
-source systems, a three-layer dbt project, seven business outputs, and synthetic data with 21 realistic
-injected incidents. Everything below was produced by running the code in this repository.
+Most data quality tools stop at "this test failed." In my experience that's the easy part. The questions
+that take up an afternoon come after: where did this data come from, who owns it, what reads from it, does it
+end up in the finance numbers, and is it worse than the other twelve things that are also red today? DataTrust
+is my attempt at answering those questions in one place, and at measuring how good the checks actually are
+instead of assuming they work.
 
 ![Platform overview](docs/images/overview.png)
 
-**Stack:** Python 3.11+, PostgreSQL 15, dbt-core/dbt-postgres 1.8+, Streamlit, psycopg 3, networkx,
-pydantic, Plotly. No Spark, Kafka, Kubernetes, cloud services or microservices: one database, one Python
-package, one dbt project and one Streamlit app.
+## The setup
 
----
+There's no real company behind this, so I made one up: Copperleaf Coffee Co., an online coffee shop with
+subscriptions. It has five source systems:
 
-## Contents
+- Shopfront (the store: customers, products, orders, order lines)
+- PayRail (payments and refunds)
+- Rebill (subscriptions)
+- Deskline (support tickets)
+- CampaignHub (marketing campaigns)
 
-- [What it does](#what-it-does)
-- [Results at a glance](#results-at-a-glance)
-- [Architecture](#architecture)
-- [The warehouse: Copperleaf Coffee Co.](#the-warehouse-copperleaf-coffee-co)
-- [Metadata model](#metadata-model)
-- [Data quality framework](#data-quality-framework)
-- [Lineage and impact analysis](#lineage-and-impact-analysis)
-- [Priority scoring](#priority-scoring)
-- [Detector evaluation](#detector-evaluation)
-- [The workbench (Streamlit)](#the-workbench-streamlit)
-- [Running it](#running-it)
-- [Testing](#testing)
-- [Project layout](#project-layout)
-- [Design decisions](#design-decisions)
-- [Limitations and future work](#limitations-and-future-work)
+A seeded generator produces about 83k rows of data covering January 2024 to a snapshot date of 30 September
+2026. It then breaks the data in 21 specific ways that I've seen or can easily imagine happening: an order sync
+that replayed and duplicated orders, a payment worker with a skewed clock, a lost cancellation webhook, a
+PayRail account merge that pointed payments at the wrong customer, partial refunds that add up to more than was
+charged, a new chat widget sending a channel value nobody mapped. For every one of these, the generator records
+which rows it touched and which rule should catch it, so I can check the detector against the truth.
 
----
+On top of that sits a dbt project with 9 staging views (with enforced contracts), 8 intermediate models and 11
+marts: order facts, the monthly finance close, CLV, customer health, campaign performance, executive KPIs. Seven
+dbt exposures describe who actually consumes the data, e.g. the executive dashboard, the month-end close and a
+loyalty tier sync that pushes data back to customers.
+
+The stack is Python, PostgreSQL 15, dbt, Streamlit, psycopg 3, networkx, pydantic and Plotly. Everything is
+one database and one Python package. I didn't see a reason for anything heavier at this size.
 
 ## What it does
 
-| Capability | How it works |
-|---|---|
-| **Catalog and discovery** | 44 assets (9 raw sources, 28 dbt models, 7 exposures) with 389 columns, ingested from dbt's `manifest.json` / `catalog.json` and combined with governance YAML. Search ranks matches on name, column, glossary term, owner, domain, source system and description, and says why each result matched. |
-| **Business context** | 7 owning teams with lead, Slack channel and on-call rotation; 5 source systems with source-to-raw-table mappings; 20 glossary terms linked to 54 assets and columns; 58 critical data elements tagged with a category (identifier, financial, ...). |
-| **Profiling** | Generic profiler for any catalogued relation: row count, null rate, distinct count, uniqueness, min/max/mean/median/stddev, top values, samples, and freshness against per-source SLAs. PII columns are never sampled. Each run is persisted. |
-| **Quality detection** | 56 declarative rules in 10 rule types covering 11 defect categories, compiled to parameterised SQL and executed in PostgreSQL. Results, failing-row samples and health scores are stored per run, over 14 daily backfilled runs. |
-| **Issue management** | One tracked issue per failing rule, with statuses `open`, `investigating`, `accepted` and `resolved`. Issues auto-resolve when the rule passes and reopen when it fails again. Every transition and comment is audited. |
-| **Lineage** | Built from dbt `depends_on` (56 edges, deepest chain 11 hops) and annotated with the columns each model reads. Supports direct and transitive upstream/downstream traversal, depth limits, and all paths between two assets. |
-| **Impact analysis** | Blast radius of a defect in an asset or specific columns: downstream assets by depth, critical consumers, financial, executive and customer-facing outputs, teams to notify, and exposed glossary terms. |
-| **Prioritization** | Transparent, additive, configurable score. Failure count and failure share are worth at most 15 of 100 points; the rest comes from severity, criticality and blast radius. |
-| **Evaluation** | Two detector versions (`baseline`, `improved`) evaluated by real rule execution on 60 held-out labelled cases plus a 10-case regression suite. Runs are append-only, so the baseline result stays visible. |
+**Catalog.** It reads dbt's `manifest.json` and `catalog.json` and combines them with a few YAML files I keep
+for things dbt doesn't know: teams (lead, Slack channel, on-call), source systems, and a glossary. The result
+is 44 assets and 389 columns, 58 of them marked as critical data elements, plus 20 glossary terms linked to the
+tables and columns they describe. Search tells you why each result matched (name, column, glossary term,
+owner...), which matters more than I expected once there are a few dozen tables.
 
-## Results at a glance
+**Profiling.** A generic profiler runs against any table in the catalog: null rates, distinct counts, min/max,
+mean and median, top values, sample values, and freshness against each source's SLA. Columns tagged as PII
+never get sampled. Every run is saved, so you can look at history.
 
-These numbers are computed by `datatrust pipeline`. Integration tests rerun the same steps in a throwaway
-database, and DB tests rerun the evaluation in a sandbox; together they assert the values below.
-
-**Detector evaluation on 60 held-out cases (30 defective, 30 valid):**
-
-| Detector | TP | FN | FP | TN | Accuracy | Precision | Recall | F1 | Specificity |
-|---|---|---|---|---|---|---|---|---|---|
-| baseline | 28 | 2 | 1 | 29 | 0.950 | 0.966 | 0.933 | 0.949 | 0.967 |
-| improved | 30 | 0 | 0 | 30 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
-
-The baseline's three errors are analysed in [`evaluation/failure_analysis.yml`](evaluation/failure_analysis.yml)
-and fixed by three targeted rule changes, each covered by regression cases and tests ([details](#detector-evaluation)).
-The committed JSON in [`evaluation/results/`](evaluation/results) is written by the runner, and
-`tests/db/test_evaluation.py` fails if it differs from a fresh run.
-
-**A small, important defect outranks a large, harmless one:**
-
-| Issue | Affected records | Downstream assets | Priority |
-|---|---|---|---|
-| `orders_customer_exists`: orders pointing at customers that do not exist | 3 of 22,531 | 21 (finance close, executive KPIs, CLV, ...) | **81.6, P1** |
-| `refunds_cumulative_not_exceeding_payment`: partial refunds adding up past the capture | 9 | 23 | **83.3, P1** |
-| `tickets_channel_accepted_values`: new chat widget writes `chat_widget_v2` | 521 | 0 | **19.4, P4** (accepted risk) |
-
-The Spearman rank correlation between affected records and priority across the 21 demo issues is −0.19.
-The ordering comes from where the broken data flows, not from how much of it there is.
-
-**On clean data** (generated without defects and built through dbt), the improved rules raise nothing. The
-baseline flags 35 legitimate $0.00 support-replacement payments, the same false-positive pattern as held-out
-case HO-059 (asserted in `tests/integration/test_pipeline.py`).
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph Sources["Synthetic source systems"]
-        GEN["generator<br/>deterministic seed<br/>+ 21 injected incidents"]
-    end
-    subgraph PG["PostgreSQL"]
-        RAW[("raw.*<br/>9 tables")]
-        STG[("analytics_staging<br/>9 contracted views")]
-        INT[("analytics_intermediate<br/>8 tables")]
-        MART[("analytics_marts<br/>11 tables")]
-        META[("datatrust.*<br/>22 metadata tables")]
-        EVAL[("datatrust_eval<br/>sandbox")]
-    end
-    subgraph DBT["dbt project"]
-        BUILD["dbt build + docs generate"]
-        ART["manifest.json<br/>catalog.json<br/>run_results.json"]
-    end
-    subgraph PY["datatrust package"]
-        ING["metadata.ingest"]
-        PROF["profiling"]
-        QE["quality engine<br/>10 check types"]
-        LIN["lineage + impact"]
-        PRI["priority model"]
-        EV["evaluation runner"]
-        SVC["services/*"]
-    end
-    GOV["config/governance/*.yml<br/>teams, systems, glossary"]
-    RULES["config/quality_rules.yml"]
-    CASES["evaluation/*.yml<br/>labelled cases"]
-    UI["Streamlit workbench<br/>11 pages"]
-
-    GEN --> RAW --> BUILD
-    BUILD --> STG --> INT --> MART
-    BUILD --> ART --> ING
-    GOV --> ING --> META
-    META --> PROF --> META
-    RULES --> QE
-    STG --> QE
-    QE --> LIN --> PRI --> META
-    CASES --> EV
-    RULES --> EV
-    EV --> EVAL
-    EV --> META
-    META --> SVC --> UI
-```
-
-All three schemas live in one PostgreSQL database. The Python package is layered: domain modules
-(`quality`, `lineage`, `impact`, `priority`, `profiling`, `evaluation`) have no UI code; `datatrust/services/`
-turns them into page-shaped read models; the Streamlit pages only call services and never issue SQL.
-`datatrust pipeline` runs the steps in order:
-
-```mermaid
-flowchart LR
-    A[init-db] --> B[generate] --> C[dbt] --> D[ingest] --> E[profile] --> F["quality backfill<br/>(14 daily runs)"] --> G[triage] --> H["evaluate<br/>(2 suites × 2 detectors)"]
-```
-
-A full rebuild takes about 30 seconds and is deterministic: rerunning it reproduces the same warehouse, issues,
-priorities and evaluation results.
-
-## The warehouse: Copperleaf Coffee Co.
-
-Copperleaf sells coffee and equipment online and through subscriptions. The data covers 2024-01 to the
-snapshot date of 2026-09-30.
-
-| Source system | What it is | Raw tables | Freshness SLA |
-|---|---|---|---|
-| Shopfront | E-commerce platform | customers, products, orders, order_items | orders and order items 6 h, customers 48 h |
-| PayRail | Payment processor | payments, refunds | payments 2 h, refunds 48 h |
-| Rebill | Subscription billing | subscriptions | 72 h |
-| Deskline | Support desk | tickets | 24 h |
-| CampaignHub | Marketing campaigns | campaigns | none |
-
-The dbt project (`dbt/`) has 9 **staging** views with enforced contracts, 8 **intermediate** models (order
-enrichment, payment and refund rollups, attribution, subscription MRR, support summaries) and 11 **marts**:
-core dimensions and facts, the finance close, daily revenue, CLV, customer health, campaign performance and
-executive KPIs. Seven **exposures** declare the business outputs with owners and audiences:
-`executive_kpi_dashboard`, `finance_month_end_close`, `revenue_forecast_model`, `loyalty_tier_sync`,
-`customer_health_console`, `growth_attribution_dashboard` and `subscription_retention_dashboard`.
-
-Model `meta` carries ownership, criticality and freshness settings; column `meta` marks critical data elements
-and PII. dbt's own tests (43, run with `severity: warn` so the build completes on defective data) are ingested
-next to DataTrust's results.
-
-**Injected incidents.** `datatrust/generator/defects.py` applies 21 incidents to clean data, such as a replayed
-order sync, a clock-skewed payment worker, a lost cancellation webhook, a PayRail account merge, partial refunds
-that add up past the capture, and a new chat widget emitting an unmapped channel. Each incident records ground
-truth: affected record ids, expected failing rows and the rule expected to catch it. Incidents never overlap on
-a record, and many are concentrated in the last two weeks, so the backfilled health trend declines the way it
-would during a real incident. The integration test checks that every injected incident is caught by its rule.
-
-## Metadata model
-
-The `datatrust` schema has 22 tables ([`datatrust/sql/metadata_schema.sql`](datatrust/sql/metadata_schema.sql)),
-with foreign keys, check constraints on every enumerated status, and a partial unique index guaranteeing at
-most one unresolved issue per rule.
-
-```mermaid
-erDiagram
-    teams ||--o{ assets : owns
-    teams ||--o{ source_systems : owns
-    teams ||--o{ glossary_terms : owns
-    source_systems ||--o{ source_mappings : feeds
-    assets ||--o| source_mappings : "mapped from"
-    assets ||--o{ asset_columns : has
-    assets ||--o{ asset_dependencies : "upstream of"
-    glossary_terms ||--o{ glossary_term_links : "linked to"
-    asset_columns ||--o{ glossary_term_links : ""
-    assets ||--o{ dbt_tests : "tested by"
-    profile_runs ||--o{ asset_profiles : produces
-    asset_profiles ||--o{ column_profiles : contains
-    assets ||--o{ quality_rules : "checked by"
-    quality_runs ||--o{ quality_results : records
-    quality_rules ||--o{ quality_results : ""
-    quality_rules ||--o{ issues : raises
-    issues ||--o{ issue_impacts : "blast radius"
-    issues ||--o{ issue_events : "audit trail"
-    evaluation_runs ||--o{ evaluation_predictions : contains
-    evaluation_cases ||--o{ evaluation_predictions : ""
-```
-
-| Group | Tables |
-|---|---|
-| Ownership and governance | `teams`, `source_systems`, `source_mappings`, `glossary_terms`, `glossary_term_links` |
-| Technical metadata | `assets`, `asset_columns`, `asset_dependencies` (with `referenced_columns`), `dbt_tests` |
-| Profiling | `profile_runs`, `asset_profiles`, `column_profiles` |
-| Quality | `quality_rules`, `quality_runs`, `quality_results` (counts, failure rate, samples, health weight) |
-| Issues | `issues` (priority score, band and factor breakdown), `issue_impacts`, `issue_events` |
-| Evaluation | `evaluation_cases` (content-hashed), `evaluation_runs`, `evaluation_predictions` |
-| Operations | `pipeline_events` |
-
-Ingestion is idempotent: assets and columns are upserted on stable dbt `unique_id`s, while dependencies and
-glossary links are replaced. Columns that disappear from dbt are deactivated, not deleted, so history keeps
-its references.
-
-## Data quality framework
-
-Rules are declarative YAML ([`config/quality_rules.yml`](config/quality_rules.yml)) and validated with pydantic
-on load: known category and type, identifier-safe column names, type-specific parameters with unknown keys
-rejected, unique keys, and valid `supersedes` references. They are then checked against the ingested catalog
-(every referenced asset and column must exist).
+**Quality checks.** There are 56 rules in [`config/quality_rules.yml`](config/quality_rules.yml), split into 10
+rule types: not null, unique, relationship, accepted values, range, not in the future, chronology, row
+condition, join condition and aggregate reconciliation. Together they cover missing and duplicate identifiers,
+broken relationships, bad dates, events in the wrong order, unknown codes, inconsistent statuses, bad numbers
+and cross-table reconciliation. A rule looks like this:
 
 ```yaml
 - key: payments_customer_matches_order
@@ -236,313 +65,239 @@ rejected, unique keys, and valid `supersedes` references. They are then checked 
     reference_asset: stg_shopfront__orders
     join: {order_id: order_id}
     invalid_when: "p.customer_id IS DISTINCT FROM r.customer_id"
-    context_columns: [customer_id]
   severity: critical
-  business_impact: Cash attributed to the wrong customer corrupts customer cash history, CLV and chargeback handling.
+  business_impact: Cash attributed to the wrong customer corrupts customer cash history, CLV and chargebacks.
   rulesets: [improved]
-  rationale: Baseline false negative HO-036 ...
 ```
 
-| Rule type | Detects | Categories covered |
-|---|---|---|
-| `not_null` | missing values | missing identifiers |
-| `unique` | repeated keys | duplicate identifiers |
-| `relationship` | orphaned foreign keys | broken relationships |
-| `accepted_values` | unknown codes | invalid categorical values |
-| `range` | out-of-bounds numbers or dates, optionally scoped with `where` | invalid numeric values, invalid dates |
-| `not_future` | timestamps after the data cutoff | invalid or impossible dates |
-| `chronology` | events out of order, within a row or across a join | incorrect chronology |
-| `row_condition` | any row-level business predicate | inconsistent statuses, financial consistency |
-| `join_condition` | predicates across two tables | cross-table business rules |
-| `aggregate_reconciliation` | a parent value vs an aggregate of child rows (`equal` or `child_lte_primary`) | cross-table reconciliation, financial consistency |
+Each rule type is a small Python class that compiles the rule into a SQL query returning the bad rows. Table
+and column names go through psycopg's identifier quoting, and values are bound as parameters. The few
+free-form SQL snippets come only from the rule file and get rejected if they contain anything like `;`, a
+comment or a `DROP`. Rules run in Postgres one at a time, so one broken rule can't take the others down.
 
-**Execution.** Each check compiles to one query returning the *failing rows* of its asset (aliased `p`). The
-engine wraps it to count scanned and failing rows and to fetch samples. Identifiers go through
-`psycopg.sql.Identifier`, constants through `sql.Literal`, and the cutoff timestamp is a bound parameter.
-Free-form expressions come only from the version-controlled rule file, and statement separators, comments and
-DML/DDL keywords are rejected. Join checks deduplicate on a synthetic row id, so a row that matches two
-reference rows still counts once. Rules run on one autocommit connection with a statement timeout, so a broken
-rule is recorded as `error` without affecting the others. Adding a rule type means adding one `Check` subclass
-to the registry in `datatrust/quality/checks.py`.
+Rules sit on the staging models, because that's where bad source data enters. I'd rather catch a duplicate
+order once in staging and then use lineage to show which marts it reaches than re-run the same check on every
+mart.
 
-**Health.** A passing rule scores 1. A failing rule scores at most 0.5 and falls linearly to 0 at a 5% failure
-rate. Health is the severity-weighted mean (low 1 to critical 4) × 100, excluding errored rules.
+**Issues.** A failing rule opens an issue. Issues can be open, investigating, accepted (a known risk we're
+living with) or resolved. They close themselves when the rule passes again and reopen if it fails again. Every
+status change and comment is logged. To get a real trend instead of a single snapshot, the pipeline replays
+14 daily runs, each one seeing only the rows that had been loaded by that day. You can watch health drop from
+86 to 78 as the incidents land.
 
-**History.** `datatrust quality backfill --days 14` replays daily runs, each seeing only rows with
-`loaded_at` up to that day, so the demo has a real trend (86.1 down to 78.3) instead of a single snapshot.
+**Lineage and impact.** Lineage comes straight from dbt's dependency graph: 56 edges, with the longest chain 11
+hops from a raw payments table to the executive dashboard. During ingestion I also scan each model's compiled
+SQL to see which upstream columns it uses. That lets impact analysis be a bit smarter: if only
+`orders.campaign_id` is broken, it follows the models that read `campaign_id` and leaves the finance close
+alone. If it can't tell what a model reads, it assumes the model reads everything. Duplicate rows skip this
+pruning entirely, because a duplicated order inflates every join downstream no matter which column you look at.
 
-**Issue lifecycle.**
-
-```mermaid
-stateDiagram-v2
-    [*] --> open: rule fails
-    open --> investigating
-    open --> accepted
-    investigating --> open
-    investigating --> accepted
-    open --> resolved: rule passes (auto) or manual
-    investigating --> resolved
-    accepted --> resolved
-    accepted --> open
-    resolved --> open: rule fails again (reopen)
-```
-
-While an issue is unresolved, each run refreshes its counts, samples, blast radius and priority.
-`config/demo_triage.yml` scripts a realistic triage state for the demo (two issues under investigation, one
-accepted risk with a justification, and a comment). It is applied by the same code path the UI form uses.
-
-## Lineage and impact analysis
-
-`LineageGraph` (networkx DAG) is built from `asset_dependencies`; cycles are rejected. Traversals:
-`direct_upstream/downstream`, `all_upstream/downstream`, `upstream_depths/downstream_depths` (minimum hops),
-`shortest_path`, `all_paths` (shortest first, capped), `neighbourhood(n, up, down)` and `longest_chain`.
-
-During ingestion, DataTrust parses each model's compiled SQL to record which upstream columns it reads
-(`asset_dependencies.referenced_columns`). Impact analysis uses this to **prune the first hop**: a defect
-confined to `stg_shopfront__orders.campaign_id` only reaches the models that read `campaign_id`, not the finance
-close. Unknown references count as "reads everything", so pruning never hides impact. Beyond the first hop the
-defect is assumed to travel with the derived rows. **Row-level** defects (duplicate identifiers) bypass pruning,
-because duplicated rows fan out every join downstream.
+For any asset (or set of columns) you get what's downstream and how far away it is, which consumers are
+critical, whether financial, executive or customer-facing outputs are exposed, which teams to notify, and
+which glossary terms are involved. A defect in `stg_shopfront__orders`, for example, reaches 21 assets,
+including 7 business outputs, with the executive dashboard 3 hops away.
 
 ![Impact analysis](docs/images/impact.png)
 
-An `ImpactReport` lists impacted assets with depth and path, critical consumers, marts and exposures; flags
-financial, executive and customer-facing exposure with hops to the nearest executive output; names the owner
-first, then every downstream team; and lists the glossary terms exposed (column-level terms for the affected
-columns plus asset-level terms downstream), the related rules and the upstream source systems. Example from
-the demo: a defect in `stg_shopfront__orders` reaches 21 assets (16 critical, 11 marts, 7 business outputs,
-executive reporting 3 hops away), with an impact score of 90/100. The Impact page also supports "what if"
-analysis for any asset and column selection, without needing an issue.
+## Prioritization
 
-## Priority scoring
+This is the part I cared most about. If you sort issues by failing row count, the loudest problem wins, and
+the loudest problem is usually not the important one.
 
-The priority score is a sum of capped factor points (0–100), configured in
-[`config/priority_model.yml`](config/priority_model.yml). The model refuses to load if the maxima don't sum to
-100. Every factor is stored on the issue with its points and a plain-language reason, so any score can be
-audited in the UI.
+The score is a plain sum of points out of 100, configured in
+[`config/priority_model.yml`](config/priority_model.yml):
 
-| Group | Factor | Max | Rule |
-|---|---|---|---|
-| Defect | Severity | 20 | critical 20, high 14, medium 8, low 3 |
-| Defect | Affected records | 8 | log-scaled, saturates at 10,000 |
-| Defect | Affected share | 7 | linear, saturates at 5% |
-| Defect | Dataset criticality | 10 | critical 10, high 7, medium 4, low 1 |
-| Defect | Field criticality | 10 | 6 if a critical data element fails, +4 if it is financial or an identifier |
-| Blast radius | Downstream dependencies | 10 | linear up to 25 assets |
-| Blast radius | Critical consumers | 10 | 0.5 per high or critical downstream asset |
-| Blast radius | Financial reporting | 8 | any financial-reporting asset downstream |
-| Blast radius | Executive / customer-facing | 9 | 9 if executive output is within 2 hops, −1 per extra hop (minimum 5); 7 for customer-facing |
-| Blast radius | Teams affected | 8 | 1.6 per additional team |
+- about the defect itself: severity (20), dataset criticality (10), whether a critical field is involved
+  (10), and the number and share of failing rows (8 + 7);
+- about what depends on it: number of downstream assets (10), critical downstream assets (10), financial
+  reporting downstream (8), an executive or customer-facing output downstream (9, decaying with distance), and
+  how many teams are affected (8).
 
-Bands: **P1** ≥ 80, **P2** ≥ 65, **P3** ≥ 45, otherwise **P4**. The blast-radius group alone, normalised to
-0–100, is the *impact score* shown on the Impact page.
+Volume can contribute 15 points at most. Every issue stores how it got its score, line by line, so you can
+disagree with it. P1 starts at 80, P2 at 65, P3 at 45.
+
+In the demo data:
+
+- 3 orders pointing at customers that don't exist: they feed 21 downstream assets, including the finance close
+  and the executive KPIs. **81.6, P1.**
+- 521 support tickets with an unrecognised channel: nothing downstream reads that column. **19.4, P4**, and
+  in the demo it's marked as an accepted risk.
+
+Across all 21 issues, the rank correlation between row count and priority is −0.19, which is what I wanted:
+the size of a problem barely predicts how much it matters.
 
 ![Prioritization](docs/images/prioritization.png)
 
-## Detector evaluation
+## Measuring the checks
 
-**Method.** [`evaluation/holdout_cases.yml`](evaluation/holdout_cases.yml) holds 60 labelled cases, 30 defective
-and 30 valid, written separately from rule development. Each case is a handful of records across staging tables,
-with a shared reference context (customers, products, a campaign). For every case, the runner:
+I wanted an honest number for how well the rules work, so I wrote 60 labelled test cases, separately from the
+rules: 30 contain a defect and 30 are valid but awkward, and every case is a handful of rows across the
+staging tables. For each case, the evaluator rebuilds a sandbox schema with the same column types as the dbt
+staging contracts, loads just that case, and runs the actual rules. If any rule fires, the case counts as
+"defective."
 
-1. recreates `datatrust_eval` with one table per staging model, using the **dbt contract column types from the
-   manifest**, so the rules run exactly as they do on the warehouse;
-2. loads the shared context plus that case's records alone;
-3. executes every rule of the detector version under test. If any rule fails, the case is predicted
-   `defective`; otherwise it is predicted `valid`.
+The first version of the rules (the baseline) got:
 
-Predictions, triggered rules and metrics are stored in `evaluation_runs` and `evaluation_predictions` together
-with a content hash of the cases, so a run can be tied to the exact inputs it saw. Nothing is hardcoded:
-change a rule or a case and the matrix changes. Runs are append-only. The baseline is a separate detector
-version and keeps its own rows, so evaluating the improved detector never overwrites it.
+| | Predicted defective | Predicted valid |
+|---|---|---|
+| Actually defective | 28 | 2 |
+| Actually valid | 1 | 29 |
+
+That's 95% accuracy, 0.966 precision and 0.933 recall. The three mistakes were more interesting than the
+score:
+
+- **HO-050, missed.** Two partial refunds of 26.00 and 22.00 on a 44.00 payment. My rule compared each refund
+  to the payment, and each one on its own was fine. Together they refunded 4.00 more than was collected. The
+  rule checked something that's really about the total one row at a time.
+- **HO-036, missed.** After an account merge, a payment for customer C1001's order was recorded against C1002.
+  I checked that the payment's order existed and that its customer existed, and both did. Nothing checked
+  that they agreed with each other.
+- **HO-059, false alarm.** Support replaced a damaged bag with a free order, and the payment processor logged
+  a successful 0.00 payment. My "successful payments must be positive" rule flagged it, even though $0
+  replacements are a normal thing to happen.
+
+Each one got a targeted fix: a rule that sums refunds per payment, a rule that compares the payment's
+customer with the order's, and a narrower amount rule (0.00 is only suspicious when the order itself isn't
+free). The write-up is in [`evaluation/failure_analysis.yml`](evaluation/failure_analysis.yml). I added 10
+regression cases that poke at the edges of those fixes: split-tender payments, refunds that exactly match the
+charge, a $0 charge on an order that wasn't free, and so on. The improved rules catch all 30 defective held-out
+cases with no false alarms, and get all 10 regression cases right.
+
+Two things I was careful about. The baseline isn't deleted or overwritten: it's a separate rule set, and its
+runs stay in the history. And the results in [`evaluation/results/`](evaluation/results) are written by the
+evaluator, with a test that fails if they ever stop matching a fresh run.
+
+To be upfront: I wrote both the cases and the rules, and I tried to keep them apart. So the perfect score
+for the improved rules says the fixes work on the failures I analysed. It doesn't say they'd catch everything in real
+production data.
 
 ![Detector evaluation](docs/images/evaluation.png)
 
-**Failure analysis of the baseline** ([`evaluation/failure_analysis.yml`](evaluation/failure_analysis.yml)):
+## The app
 
-| Case | Error | Pattern | Root cause | Fix |
-|---|---|---|---|---|
-| HO-050 | false negative | Aggregate constraint checked row by row | Two partial refunds (26.00 + 22.00) against a 44.00 capture. Each is smaller than the payment, so the per-row rule `refunds_not_exceeding_payment` passes, yet together they return 4.00 more than was collected. | `refunds_cumulative_not_exceeding_payment`: an `aggregate_reconciliation` that sums refunds per payment |
-| HO-036 | false negative | Individually valid, jointly inconsistent references | After a PayRail account merge, a capture for customer C1001's order is recorded against C1002. `order_id` and `customer_id` each exist, and nothing compares them. | `payments_customer_matches_order`: a `join_condition` requiring the payment's customer to match the order's (NULL-safe) |
-| HO-059 | false positive | Naive bound that ignores a legitimate process | Support replaced a damaged bag with a 100%-discounted order; PayRail records a 0.00 succeeded authorisation. `payments_succeeded_amount_positive` (amount > 0) flags it. | `payments_succeeded_amount_valid`: negative is invalid; 0.00 is invalid only if the order total is not 0.00 or the order is missing |
+`make app` starts a Streamlit app at http://localhost:8501 with 11 pages: an overview, quality runs, issue
+investigation (with failing sample rows, the score breakdown, a blast-radius graph, who to contact and a
+triage form), prioritization, catalog search, dataset detail, profiling, lineage, impact analysis, the
+glossary, and the evaluation results.
 
-The two replacing rules declare `supersedes:` and the baseline rules remain tagged `rulesets: [baseline]`.
-The baseline detector stays reproducible, and the UI shows which rule replaced which and why.
-
-**Regression suite.** [`evaluation/regression_cases.yml`](evaluation/regression_cases.yml) has 10 cases that
-probe the edges of each fix. The defective cases are: three partial refunds; refunds exceeding one leg of a
-split-tender payment; a mismatch on the second split leg; a $0 capture on a paid order; a $0 payment for an
-unknown order; and a negative payment on a $0 order. The valid cases are: refunds exactly equal to the
-capture; a two-line $0 replacement; a split tender with a consistent customer; and refunds spread across split
-legs. Baseline result: 3 TP, 3 FN, 1 FP, 3 TN. Improved result: 6 TP, 0 FN, 0 FP, 4 TN.
-
-**Regression tests** (`tests/db/test_evaluation.py`) execute both detectors on both suites and assert:
-
-- the baseline matrix is exactly 28/2/1/29, and its errors are exactly HO-036, HO-050 (FN) and HO-059 (FP);
-- for each of those three cases, the baseline stays wrong and the improved detector is right *for the
-  documented reason* (the specific new rule fires, or nothing fires for HO-059);
-- no case the baseline got right is lost by the improved detector;
-- the regression suite matrices, and that the narrower $0 rule still catches the $0 capture on a paid order;
-- the committed result snapshots in `evaluation/results/` equal a fresh run.
-
-## The workbench (Streamlit)
-
-```bash
-make app        # http://localhost:8501
-```
-
-| Section | Page | What it answers |
-|---|---|---|
-| Monitor | Platform overview | Health and trend, open, P1 and accepted issues, failing datasets, pipeline activity |
-| | Data quality | Run history, category trends, per-asset health, rule history, each rule's compiled SQL |
-| | Issue investigation | Queue, evidence (failing samples with joined context), priority breakdown, blast-radius graph, owners to contact, history, and a triage form (status changes and comments) |
-| | Prioritization | Priority vs affected records, small-vs-large comparison, score composition of every issue |
-| Explore | Data catalog | Search with match reasons, filters, cards or table |
-| | Dataset detail | Columns with CDE, glossary and profile; ownership and origin; rules and issues, including upstream issues that reach this dataset; lineage; dbt tests |
-| | Profiling | Freshness against SLA, column statistics, profile history |
-| | Lineage | Explore an asset by hops, paths between any two assets, whole-platform graph |
-| | Impact analysis | What breaks if this asset or these columns are wrong |
-| | Business glossary | Terms, definitions, calculations, owners and linked fields |
-| Assure | Detector evaluation | Confusion matrices, metric comparison, failure analysis, regression coverage, every prediction |
+If something hasn't been built yet (no database, no dbt run, no quality run), each page tells you which
+command to run instead of throwing an error. I tried to make it hard to break by clicking around in the
+wrong order.
 
 | | |
 |---|---|
 | ![Issue investigation](docs/images/issue.png) | ![Lineage](docs/images/lineage.png) |
 | ![Catalog](docs/images/catalog.png) | ![Dataset detail](docs/images/dataset.png) |
 
-Every page checks readiness first. If the database is down, a schema is missing or a step hasn't run, the page
-says which `make` target to run instead of raising an error. Pages deep-link to each other (`?issue=DQ-0018`,
-`?asset=fct_orders`).
+## How it fits together
+
+```mermaid
+flowchart LR
+    GEN[Generator<br/>seeded data + 21 incidents] --> RAW[(raw)]
+    RAW --> DBT[dbt build]
+    DBT --> WH[(staging / intermediate / marts)]
+    DBT --> ART[dbt artifacts]
+    ART --> ING[Ingest]
+    GOV[teams, sources,<br/>glossary YAML] --> ING
+    ING --> META[(datatrust metadata)]
+    WH --> PROF[Profiler] --> META
+    RULES[quality_rules.yml] --> QE[Quality engine]
+    WH --> QE --> IMP[Lineage + impact] --> PRI[Priority] --> META
+    CASES[labelled cases] --> EV[Evaluator] --> META
+    META --> SVC[services] --> UI[Streamlit]
+```
+
+The warehouse, DataTrust's own metadata (22 tables in the `datatrust` schema) and the evaluation sandbox all
+live in the same Postgres database. The UI pages only call the functions in `datatrust/services/` and never
+write SQL themselves.
 
 ## Running it
 
-**Prerequisites:** Python 3.11+, and either Docker or a local PostgreSQL 15+. Developed and validated on
-macOS with Python 3.12, dbt-core 1.12 and PostgreSQL 15.
+You need Python 3.11 or newer and either Docker or a local Postgres 15. I developed it on a Mac with Python
+3.12 and a Homebrew Postgres 15.
 
 ```bash
 git clone https://github.com/hrithikda/data-trust.git && cd data-trust
-make install          # .venv with DataTrust + dev tools; copies .env.example to .env
-make db-up            # PostgreSQL 15 in Docker (skip if you have a local server; see below)
-make pipeline         # init-db → generate → dbt → ingest → profile → quality → triage → evaluate (~30 s)
-make app              # http://localhost:8501
+make install     # virtualenv + dependencies, copies .env.example to .env
+make db-up       # Postgres in Docker (skip this if you already run Postgres)
+make pipeline    # builds everything, about 30 seconds
+make app
 ```
 
-**Using an existing PostgreSQL** instead of Docker: create a role that can create databases, then put the
-connection settings in `.env`. Every setting is an environment variable with the `DATATRUST_` prefix (see
-[`.env.example`](.env.example)), and no secret is hardcoded.
+If you'd rather use your own Postgres, create a user that's allowed to create databases and put the connection
+details in `.env`. All settings are `DATATRUST_*` environment variables, listed in [`.env.example`](.env.example).
 
 ```sql
 CREATE ROLE datatrust LOGIN PASSWORD 'datatrust' CREATEDB;
 ```
 
-`datatrust init-db` creates the database if it is missing. If port 5432 is already taken, set
-`DATATRUST_DB_PORT` (docker-compose uses the same variable).
-
-**Individual steps.** Each step can be run alone and rerun safely:
-
-| Command | Does |
-|---|---|
-| `datatrust init-db [--reset]` | create the database and metadata schema (`--reset` drops history) |
-| `datatrust generate [--seed N] [--scale X] [--clean]` | regenerate source data and reload `raw` (`--clean`: no injected defects); writes CSVs and the ground-truth `defect_manifest.json` to `data/generated/` |
-| `datatrust dbt` | `dbt build` (models and tests) and `dbt docs generate` with DataTrust's connection settings |
-| `datatrust ingest` | load dbt artifacts and governance config into the catalog |
-| `datatrust profile [--asset NAME]` | profile relations |
-| `datatrust quality run [--ruleset baseline\|improved]` / `quality backfill --days 14` | execute rules, update issues |
-| `datatrust evaluate [--suite holdout\|regression\|all] [--detector ...] [--dry-run]` | run the evaluation |
-| `datatrust issue list` / `issue status DQ-0018 investigating --actor "Name"` / `issue comment ...` | triage from the terminal |
-| `datatrust status` | which steps have run, and what to run next |
-
-Matching `make` targets exist (`make help`). To run dbt directly:
-`cd dbt && dbt build --profiles-dir .`. The profile reads the same `DATATRUST_DB_*` variables.
-
-**Configuration** lives in `config/`: governance (`governance/teams.yml`, `source_systems.yml`, `glossary.yml`),
-`quality_rules.yml`, `priority_model.yml` and `demo_triage.yml`. Invalid configuration fails fast with a
-message naming the problem (exit code 2 for settings, 1 for other DataTrust errors).
-
-## Testing
+`make pipeline` runs these steps in order, and each one can also be run on its own and rerun safely:
 
 ```bash
-make test               # everything; DB tests skip with a hint if PostgreSQL is unreachable
-make test-unit          # no database needed
-make test-db            # engine, profiler and evaluation against PostgreSQL (scratch schemas)
-make test-integration   # whole platform in a throwaway database (~40 s)
-make lint
+datatrust init-db           # create the database and metadata tables
+datatrust generate          # new synthetic data (--clean for no defects, --seed / --scale to vary it)
+datatrust dbt               # dbt build + docs generate
+datatrust ingest            # load dbt artifacts and the YAML config
+datatrust profile
+datatrust quality backfill --days 14
+datatrust triage            # applies a scripted demo triage state
+datatrust evaluate          # both rule sets on both test suites
 ```
 
-98 tests across three layers:
+There's also `datatrust status` (what's been run so far), `datatrust issue list`, and
+`datatrust issue status DQ-0018 investigating --actor "Your Name"`. To run dbt by hand:
+`cd dbt && dbt build --profiles-dir .`.
 
-- **Unit** (`tests/unit`, 62 tests): lineage traversal, depths, column pruning and cycle rejection; impact
-  reports; priority model maths, caps, bands, executive decay, config validation, and the small-vs-large
-  ordering; confusion-matrix metrics and edge cases; health scoring; profiler type families, freshness and PII
-  suppression in the compiled SQL; rule validation, SQL compilation (identifier quoting, bound parameters,
-  forbidden constructs); generator determinism, clean-data invariants and ground-truth integrity; dbt artifact
-  parsing (real artifacts and corrupted meta); governance cross-references; evaluation suite balance and
-  failure-analysis references; catalog search ranking; DOT rendering.
-- **Database** (`tests/db`, 28 tests): every check type on hand-built tables with known bad rows, join
-  deduplication, scope and backfill filtering, error isolation; profiler statistics; the evaluation regression
-  tests described above.
-- **Integration** (`tests/integration`, 8 tests): builds everything in a separate `datatrust_test` database
-  from a copy of the dbt project, so the demo and `dbt/target` are untouched. It checks: clean data passes the
-  improved rules; every injected incident is detected; the CLI pipeline produces prioritised issues, triage
-  and history; downstream datasets list the upstream issues reaching them; evaluation history is append-only;
-  and all 11 Streamlit pages render through `streamlit.testing`.
+The data is deterministic, so running the pipeline again gives you the same warehouse, issues and scores.
 
-## Project layout
+## Tests
 
-```
-app/                      Streamlit entry point, shared UI helpers, one module per page (views/)
-config/                   governance YAML, quality rules, priority model, demo triage
-datatrust/
-  cli.py                  `datatrust` command
-  config.py, db.py        settings (env / .env) and parameterised PostgreSQL access
-  generator/              Copperleaf domain, deterministic data, defect injection with ground truth
-  metadata/               dbt runner, artifact parser, governance loader, idempotent ingestion
-  profiling/              profiler
-  quality/                rule model, check types, engine, health, issues, run service, triage
-  lineage/, impact/       lineage graph and impact analysis
-  priority/               priority model
-  evaluation/             cases, sandbox, metrics, runner
-  services/               read models used by the UI
-  sql/                    raw and metadata DDL
-dbt/                      dbt project (staging, intermediate, marts, exposures, singular test, macros)
-evaluation/               held-out and regression cases, failure analysis, result snapshots
-scripts/                  README screenshot capture
-tests/                    unit, db and integration tests
+```bash
+make test               # everything (database tests skip if Postgres isn't running)
+make test-unit
+make test-db
+make test-integration
 ```
 
-## Design decisions
+There are 98 tests. The unit tests (62) cover lineage traversal, impact, the priority math, metrics, rule
+validation and SQL compilation, the generator, dbt artifact parsing and catalog search. The database tests
+(28) run every rule type against small hand-made tables with known bad rows, plus the profiler and the
+evaluation. That's where the three baseline mistakes are pinned down: the baseline must still get them wrong,
+and the improved rules must get them right for the reason in the write-up.
 
-- **The evaluation runs the production rules, not a model of them.** The sandbox is built from the dbt
-  contracts, and cases go through the same engine and SQL. A metric can only change if a rule or a case changes.
-- **Rules are data, checks are code.** Fifty-six rules in YAML; ten small check classes compile them. Reviewers
-  can read a rule without reading Python, and a new rule type is one class.
-- **Rules target staging models.** Staging is where source defects enter the warehouse and where contracts pin
-  the columns. Downstream assets inherit issues through lineage instead of re-running every check on every mart.
-  The dataset page lists the upstream issues that reach each mart.
-- **Lineage comes from dbt, not hand-maintained diagrams.** Column references come from compiled SQL, giving
-  column-aware pruning without a full SQL parser. Unknown references fail open (count as impacted).
-- **Additive priority instead of a learned or multiplicative score.** With no labelled remediation history, an
-  auditable sum with capped, configurable factors is easier to defend and tune. Volume is deliberately capped at
-  15 points.
-- **History is append-only.** Quality runs, issue events and evaluation runs are never rewritten; the baseline
-  detector stays reproducible beside the improved one.
-- **One database, one process.** The workload (tens of assets, about 83k raw rows) does not justify distributed
-  infrastructure. PostgreSQL holds the warehouse, the metadata and the sandbox.
-- **In-memory catalog search.** For 44 assets, ranking in Python lets every hit explain why it matched. At
-  thousands of assets this would move to PostgreSQL full-text search.
+The integration tests (8) build the whole thing from scratch in a separate `datatrust_test` database so the
+demo isn't touched. They check that:
 
-## Limitations and future work
+- clean data passes the improved rules;
+- every injected incident gets caught;
+- issues come out in the expected priority order;
+- evaluation history only grows;
+- every app page renders.
 
-- **Synthetic data.** The company, incidents and evaluation cases were designed for this project. The held-out
-  cases were written separately from the rules, but by the same author, so the 60-case result shows the method
-  rather than proving performance on unseen production data. The improved detector's perfect score is on cases
-  whose failure patterns were analysed; it is not an estimate of real-world recall.
-- **Batch, not streaming.** Runs are triggered by CLI or `make`. A scheduler (cron, Airflow, Dagster) would call
-  the same commands.
-- **Column lineage is first-hop only.** Columns are matched by name in compiled SQL. Expressions, renames
-  further downstream and `SELECT *` are handled conservatively, not traced.
-- **Priority weights are expert-set.** Recorded triage outcomes could later be used to calibrate them.
-- **Single tenant, no auth.** The Streamlit app trusts its user; triage records a typed actor name.
-- **Possible extensions:** alerting to the owning team's Slack channel on new P1 issues; anomaly checks on
-  volume and distribution drift using the stored profiles; dbt Cloud or OpenLineage ingestion; and
-  PostgreSQL-backed search for larger catalogs.
+## Layout
+
+```
+app/          Streamlit app (one file per page in views/)
+config/       rules, priority weights, teams / sources / glossary, demo triage
+datatrust/    the Python package: generator, metadata, profiling, quality, lineage,
+              impact, priority, evaluation, services, CLI
+dbt/          the dbt project
+evaluation/   test cases, failure analysis, saved results
+tests/        unit, db and integration tests
+```
+
+## Things I'd change or add
+
+- The data and the test cases are synthetic, and I wrote both. Real incidents would be the next step for
+  evaluation.
+- Column lineage only looks one hop ahead and matches columns by name in the compiled SQL. Renames and
+  `SELECT *` are handled conservatively, not traced.
+- The priority weights are my judgement. With some history of how issues actually got triaged, I'd tune them
+  against that.
+- Everything runs as batch commands. In practice I'd put the same commands on a scheduler and post new P1
+  issues to the owning team's Slack channel.
+- Search is done in memory, which is fine for 44 tables. It would need Postgres full-text search well before
+  a thousand.
+- There's no login, so triage just records whatever name you type.
+
+MIT licensed.
